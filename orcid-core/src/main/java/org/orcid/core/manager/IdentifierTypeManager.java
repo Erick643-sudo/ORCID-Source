@@ -14,9 +14,25 @@ public interface IdentifierTypeManager {
 
 	IdentifierType fetchIdentifierTypeByDatabaseName(String name, Locale loc);
 
-	Map<String, IdentifierType> fetchIdentifierTypesByAPITypeName(Locale loc);
-	
-        List<IdentifierType> queryByPrefix(String query, Locale loc);
+	default IdentifierType fetchIdentifierTypeByDatabaseName(String name) {
+		return fetchIdentifierTypeByDatabaseName(name, Locale.ENGLISH);
+	}
 
-        List<IdentifierType> fetchDefaultIdentifierTypes(Locale loc);
+	Map<String, IdentifierType> fetchIdentifierTypesByAPITypeName(Locale loc);
+
+	default Map<String, IdentifierType> fetchIdentifierTypesByAPITypeName() {
+		return fetchIdentifierTypesByAPITypeName(Locale.ENGLISH);
+	}
+	
+	List<IdentifierType> queryByPrefix(String query, Locale loc);
+
+	default List<IdentifierType> queryByPrefix(String query) {
+		return queryByPrefix(query, Locale.ENGLISH);
+	}
+
+	List<IdentifierType> fetchDefaultIdentifierTypes(Locale loc);
+
+	default List<IdentifierType> fetchDefaultIdentifierTypes() {
+		return fetchDefaultIdentifierTypes(Locale.ENGLISH);
+	}
 }

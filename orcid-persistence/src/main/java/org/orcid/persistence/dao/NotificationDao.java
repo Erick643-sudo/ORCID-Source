@@ -55,12 +55,12 @@ public interface NotificationDao extends GenericDao<NotificationEntity, Long> {
     List<NotificationEntity> findPermissionsByOrcidAndClient(String orcid, String client, int firstResult, int maxResults);
 
     int archiveNotificationsCreatedBefore(Date createdBefore, int batchSize);
-    
+
+    int deleteNotificationsCreatedBefore(Date createdBefore, int batchSize);
+
     Integer archiveOffsetNotifications(Integer offset);
     
     List<Object[]> findNotificationsToDeleteByOffset(Integer offset, Integer recordsPerBatch);
-    
-    List<NotificationEntity> findNotificationsCreatedBefore(Date createdBefore, int batchSize);
     
     List<NotificationEntity> findUnsentServiceAnnouncements(int batchSize);
     
@@ -79,6 +79,6 @@ public interface NotificationDao extends GenericDao<NotificationEntity, Long> {
     void correctUserSource(List<BigInteger> ids);
 
     List<BigInteger> getIdsOfNotificationsReferencingClientProfiles(int max, List<String> clientProfileOrcidIds);
-
-
+    
+    List<NotificationEntity> findNotificationsByOrcidAndClientAndFamilyNoClientToken(String orcid, String clientId, String notificationFamily);
 }

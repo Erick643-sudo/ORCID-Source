@@ -10,11 +10,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.persistence.NoResultException;
-import javax.ws.rs.core.Response;
+import jakarta.annotation.Resource;
+import jakarta.persistence.NoResultException;
+import jakarta.ws.rs.core.Response;
 
-import org.apache.http.HttpStatus;
+import org.apache.hc.core5.http.HttpStatus;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -310,6 +310,65 @@ public class MemberV3ApiServiceDelegator_QualificationsTest extends DBUnitTest {
         Utils.verifyLastModified(qualificationSummary.getLastModifiedDate());
 
         response = serviceDelegator.createQualification(ORCID, (Qualification) Utils.getAffiliation(AffiliationType.QUALIFICATION));
+        assertNotNull(response);
+        assertEquals(Response.Status.CREATED.getStatusCode(), response.getStatus());
+        Long putCode = Utils.getPutCode(response);
+
+        response = serviceDelegator.viewActivities(ORCID);
+        assertNotNull(response);
+        ActivitiesSummary summaryWithNewElement = (ActivitiesSummary) response.getEntity();
+        assertNotNull(summaryWithNewElement);
+        Utils.verifyLastModified(summaryWithNewElement.getLastModifiedDate());
+        assertNotNull(summaryWithNewElement.getQualifications());
+        Utils.verifyLastModified(summaryWithNewElement.getQualifications().getLastModifiedDate());
+        assertNotNull(summaryWithNewElement.getQualifications().retrieveGroups());
+        assertEquals(4, summaryWithNewElement.getQualifications().retrieveGroups().size());
+        
+        boolean haveNew = false;
+
+        for (AffiliationGroup<QualificationSummary> group : summaryWithNewElement.getQualifications().retrieveGroups()) {
+            for (QualificationSummary qs : group.getActivities()) {
+                assertNotNull(qs.getPutCode());
+                Utils.verifyLastModified(qs.getLastModifiedDate());
+                if (qs.getPutCode().equals(putCode)) {
+                    assertEquals("My department name", qs.getDepartmentName());
+                    haveNew = true;
+                } else {
+                    boolean found = false;
+                    for (AffiliationGroup<QualificationSummary> g : originalSummary.getQualifications().retrieveGroups()) {
+                        if (g.getActivities().contains(qs)) {
+                            found = true;
+                        }
+                    }
+                    assertTrue(found);
+                }
+            }
+        }
+        
+        assertTrue(haveNew);
+        
+        //Remove new element
+        serviceDelegator.deleteAffiliation(ORCID, putCode);
+    }
+    
+    @Test
+    public void testAddQualificationNoCityNoCountry() {
+        SecurityContextTestUtils.setUpSecurityContext(ORCID, ScopePathType.READ_LIMITED, ScopePathType.ACTIVITIES_UPDATE);
+        Response response = serviceDelegator.viewActivities(ORCID);
+        assertNotNull(response);
+        ActivitiesSummary originalSummary = (ActivitiesSummary) response.getEntity();
+        assertNotNull(originalSummary);
+        Utils.verifyLastModified(originalSummary.getLastModifiedDate());
+        assertNotNull(originalSummary.getQualifications());
+        Utils.verifyLastModified(originalSummary.getQualifications().getLastModifiedDate());
+        assertNotNull(originalSummary.getQualifications().retrieveGroups());
+        assertEquals(3, originalSummary.getQualifications().retrieveGroups().size());
+        
+        QualificationSummary qualificationSummary = originalSummary.getQualifications().retrieveGroups().iterator().next().getActivities().get(0);
+        assertNotNull(qualificationSummary);
+        Utils.verifyLastModified(qualificationSummary.getLastModifiedDate());
+
+        response = serviceDelegator.createQualification(ORCID, (Qualification) Utils.getAffiliationNoCityNoCountry(AffiliationType.QUALIFICATION));
         assertNotNull(response);
         assertEquals(Response.Status.CREATED.getStatusCode(), response.getStatus());
         Long putCode = Utils.getPutCode(response);

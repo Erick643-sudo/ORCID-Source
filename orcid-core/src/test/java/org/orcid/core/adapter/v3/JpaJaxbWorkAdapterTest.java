@@ -9,11 +9,13 @@ import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
-import javax.annotation.Resource;
-import javax.xml.bind.JAXBContext;
-import javax.xml.bind.JAXBException;
-import javax.xml.bind.Unmarshaller;
+import jakarta.annotation.Resource;
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.JAXBException;
+import jakarta.xml.bind.Unmarshaller;
 
 import org.junit.After;
 import org.junit.Before;
@@ -32,9 +34,13 @@ import org.orcid.jaxb.model.common.Iso3166Country;
 import org.orcid.jaxb.model.common.Relationship;
 import org.orcid.jaxb.model.common.WorkType;
 import org.orcid.jaxb.model.v3.release.common.Visibility;
+import org.orcid.jaxb.model.v3.release.common.Contributor;
 import org.orcid.jaxb.model.v3.release.record.ExternalID;
 import org.orcid.jaxb.model.v3.release.record.Work;
 import org.orcid.jaxb.model.v3.release.record.summary.WorkSummary;
+import org.orcid.jaxb.model.v3.release.common.SourceClientId;
+import org.orcid.jaxb.model.v3.release.common.Source;
+import org.orcid.core.utils.SourceEntityUtils;
 import org.orcid.persistence.dao.RecordNameDao;
 import org.orcid.persistence.jpa.entities.ClientDetailsEntity;
 import org.orcid.persistence.jpa.entities.MinimizedWorkEntity;
@@ -200,6 +206,83 @@ public class JpaJaxbWorkAdapterTest extends MockSourceNameCache {
         
         // Identifier URIs should always be http, event if base url is https
         assertEquals("https://testserver.orcid.org/client/" + CLIENT_SOURCE_ID, w.getSource().retriveSourceUri());
+    }
+
+    @Test
+    public void fromWorkEntityWithBlankSubtitleDoesNotCreateSubtitleWrapper() throws IllegalAccessException {
+        WorkEntity work = getWorkEntity();
+        work.setSubtitle(" ");
+
+        Work mappedWork = jpaJaxbWorkAdapter.toWork(work);
+
+        assertNull(mappedWork.getWorkTitle().getSubtitle());
+    }
+
+    @Test
+    public void fromWorkEntityWithBlankUrlDoesNotCreateUrlWrapper() throws IllegalAccessException {
+        WorkEntity work = getWorkEntity();
+        work.setWorkUrl(" ");
+
+        Work mappedWork = jpaJaxbWorkAdapter.toWork(work);
+
+        assertNull(mappedWork.getUrl());
+    }
+
+    @Test
+    public void fromWorkEntityWithContributorsMissingHostTest() throws Exception {
+        orcidUrlManager.setBaseUrl("https://testserver.orcid.org");
+        WorkEntity work = getWorkEntity();
+        work.setContributorsJson("{\n" +
+                "\t\"contributor\": [{\n" +
+                "\t\t\"contributorOrcid\": {\n" +
+                "\t\t\t\"uri\": \"https://qa.orcid.org/0009-0000-7948-587X\",\n" +
+                "\t\t\t\"path\": \"0009-0000-7948-587X\",\n" +
+                "\t\t\t\"host\": null\n" +
+                "\t\t},\n" +
+                "\t\t\"creditName\": {\n" +
+                "\t\t\t\"content\": \"Test Author\"\n" +
+                "\t\t},\n" +
+                "\t\t\"contributorEmail\": null,\n" +
+                "\t\t\"contributorAttributes\": {\n" +
+                "\t\t\t\"contributorSequence\": null,\n" +
+                "\t\t\t\"contributorRole\": \"http://credit.niso.org/contributor-roles/data-curation/\"\n" +
+                "\t\t}\n" +
+                "\t}]\n" +
+                "}");
+
+        Work mappedWork = jpaJaxbWorkAdapter.toWork(work);
+        assertNotNull(mappedWork.getWorkContributors());
+        assertEquals(1, mappedWork.getWorkContributors().getContributor().size());
+        Contributor c = mappedWork.getWorkContributors().getContributor().get(0);
+        assertNotNull(c.getContributorOrcid());
+        assertEquals("qa.orcid.org", c.getContributorOrcid().getHost());
+        assertEquals("0009-0000-7948-587X", c.getContributorOrcid().getPath());
+        assertNotNull(c.getCreditName());
+        assertEquals("Test Author", c.getCreditName().getContent());
+        assertNull(c.getContributorEmail());
+        assertNotNull(c.getContributorAttributes());
+        assertNull(c.getContributorAttributes().getContributorSequence());
+        assertEquals("http://credit.niso.org/contributor-roles/data-curation/", c.getContributorAttributes().getContributorRole());
+
+        // Verify JAXB XML serialization works without AccessorException
+        JAXBContext context = JAXBContext.newInstance(Work.class);
+        java.io.StringWriter writer = new java.io.StringWriter();
+        context.createMarshaller().marshal(mappedWork, writer);
+        String xml = writer.toString();
+        assertTrue(xml.contains("qa.orcid.org"));
+        assertTrue(xml.contains("Test Author"));
+    }
+
+    @Test
+    public void minimizedWorkWithPartialPublicationDateDoesNotCreateEmptyYearWrapper() {
+        PublicationDateEntity entity = new PublicationDateEntity(null, 1, 1);
+
+        org.orcid.jaxb.model.v3.release.common.PublicationDate publicationDate = ReflectionTestUtils.invokeMethod(
+                jpaJaxbWorkAdapter, "mapPublicationDate", entity);
+
+        assertNull(publicationDate.getYear());
+        assertNotNull(publicationDate.getMonth());
+        assertNotNull(publicationDate.getDay());
     }
     
     @Test
@@ -508,4 +591,62 @@ public class JpaJaxbWorkAdapterTest extends MockSourceNameCache {
         assertNull(work.getPublicationYear());
         
     }
+
+    // --- PD-6145: the pre-resolved source map must be used instead of per-element resolution ---
+
+    private MinimizedWorkEntity minimizedWorkWithClientSource() {
+        MinimizedWorkEntity mWork = new MinimizedWorkEntity();
+        mWork.setId(12345L);
+        mWork.setWorkType(org.orcid.jaxb.model.common.WorkType.JOURNAL_ARTICLE.name());
+        mWork.setClientSourceId(CLIENT_SOURCE_ID);
+        mWork.setOrcid("0000-0000-0000-0001");
+        return mWork;
+    }
+
+    @Test
+    public void toWorkSummaryFromMinimizedUsesPreResolvedSource() {
+        MinimizedWorkEntity mWork = minimizedWorkWithClientSource();
+
+        Source preResolved = new Source();
+        preResolved.setSourceClientId(new SourceClientId("APP-PRE-RESOLVED"));
+        Map<String, Source> sourceMap = new HashMap<>();
+        sourceMap.put(SourceEntityUtils.getSourceKey(mWork), preResolved);
+
+        List<WorkSummary> summaries = jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(Arrays.asList(mWork), sourceMap);
+
+        assertEquals(1, summaries.size());
+        // the map's Source is used verbatim, not re-derived from the entity
+        assertNotNull(summaries.get(0).getSource());
+        assertEquals("APP-PRE-RESOLVED", summaries.get(0).getSource().getSourceClientId().getPath());
+        // everything else still maps
+        assertEquals(Long.valueOf(12345), summaries.get(0).getPutCode());
+        assertEquals(WorkType.JOURNAL_ARTICLE, summaries.get(0).getType());
+    }
+
+    @Test
+    public void toWorkSummaryFromMinimizedFallsBackWhenSourceMapMisses() {
+        MinimizedWorkEntity mWork = minimizedWorkWithClientSource();
+
+        // a map that has no entry for this key, and a null map, must both still populate a source
+        List<WorkSummary> onMiss = jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(Arrays.asList(mWork), new HashMap<String, Source>());
+        List<WorkSummary> onNullMap = jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(Arrays.asList(mWork), null);
+
+        assertNotNull(onMiss.get(0).getSource());
+        assertEquals(CLIENT_SOURCE_ID, onMiss.get(0).getSource().getSourceClientId().getPath());
+        assertNotNull(onNullMap.get(0).getSource());
+        assertEquals(CLIENT_SOURCE_ID, onNullMap.get(0).getSource().getSourceClientId().getPath());
+    }
+
+    @Test
+    public void toWorkSummaryFromMinimizedWithoutMapStillResolvesSource() {
+        // guards the @Named isolation: the source-free method must never be selected
+        // implicitly for the no-map collection overload
+        MinimizedWorkEntity mWork = minimizedWorkWithClientSource();
+
+        List<WorkSummary> summaries = jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(Arrays.asList(mWork));
+
+        assertNotNull(summaries.get(0).getSource());
+        assertEquals(CLIENT_SOURCE_ID, summaries.get(0).getSource().getSourceClientId().getPath());
+    }
+
 }

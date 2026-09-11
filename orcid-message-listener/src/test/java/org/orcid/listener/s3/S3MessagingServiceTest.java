@@ -2,7 +2,7 @@ package org.orcid.listener.s3;
 
 import static org.junit.Assert.assertEquals;
 
-import javax.xml.bind.JAXBException;
+import jakarta.xml.bind.JAXBException;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -13,7 +13,7 @@ public class S3MessagingServiceTest {
     
     @Before
     public void before() throws NoSuchFieldException, SecurityException, IllegalArgumentException, IllegalAccessException, JAXBException {
-        s3MessagingService = new S3MessagingService("","","v2Summaries", "v2Activites","v3Summaries","v3Activites");
+        s3MessagingService = new S3MessagingService("v2Summaries", "v2Activites","v3Summaries","v3Activites", false);
     }
     
     @Test

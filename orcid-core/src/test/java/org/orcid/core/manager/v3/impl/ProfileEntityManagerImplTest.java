@@ -23,7 +23,6 @@ import org.orcid.core.manager.v3.ProfileHistoryEventManager;
 import org.orcid.core.manager.v3.ProfileKeywordManager;
 import org.orcid.core.manager.v3.RecordNameManager;
 import org.orcid.core.manager.v3.ResearcherUrlManager;
-import org.orcid.core.oauth.OrcidOauth2TokenDetailService;
 import org.orcid.core.profile.history.ProfileHistoryEventType;
 import org.orcid.jaxb.model.common.AvailableLocales;
 import org.orcid.jaxb.model.message.ScopePathType;
@@ -57,7 +56,7 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
@@ -76,10 +75,7 @@ import static org.junit.Assert.assertTrue;
 public class ProfileEntityManagerImplTest extends DBUnitTest {
     private static final String CLIENT_ID_1 = "APP-5555555555555555";   
     private static final String CLIENT_ID_2 = "APP-5555555555555556";
-    private static final String USER_ORCID = "0000-0000-0000-0001";    
-    
-    @Resource
-    private OrcidOauth2TokenDetailService orcidOauth2TokenDetailService;
+    private static final String USER_ORCID = "0000-0000-0000-0001";
     
     @Resource(name = "profileEntityManagerV3")
     private ProfileEntityManager profileEntityManager;
@@ -341,19 +337,15 @@ public class ProfileEntityManagerImplTest extends DBUnitTest {
         // test ordering based on name
         assertEquals(CLIENT_ID_1, applications.get(0).getClientId());
         assertEquals(CLIENT_ID_2, applications.get(1).getClientId());
-
-        //Assert we can delete them
-        profileEntityManager.disableClientAccess(CLIENT_ID_1, USER_ORCID);
-        profileEntityManager.disableClientAccess(CLIENT_ID_2, USER_ORCID);
-        
-        applications = profileEntityManager.getApplications(USER_ORCID);
-        assertNotNull(applications);
-        assertTrue(applications.isEmpty());
+        // Remove the tokens
+        orcidOauth2TokenDetailDao.disableClientAccessTokensByUserOrcid(USER_ORCID, CLIENT_ID_1);
+        orcidOauth2TokenDetailDao.disableClientAccessTokensByUserOrcid(USER_ORCID, CLIENT_ID_2);
     }
     
     @SuppressWarnings("unused")
     @Test
     public void testDontGetDuplicatedApplications() {
+        // Be sure to remove all applications for that user and client
         Long seed = System.currentTimeMillis();
         Date expiration = new Date(System.currentTimeMillis() + 10000);
         OrcidOauth2TokenDetail token1 = createToken(CLIENT_ID_1, "token-1-" + seed, USER_ORCID, expiration, "/read-limited", false); // Displayed
@@ -378,10 +370,9 @@ public class ProfileEntityManagerImplTest extends DBUnitTest {
         assertTrue(applications.get(0).getScopePaths().keySet().contains(ScopePathType.ORCID_PROFILE_READ_LIMITED.toString()));
         assertTrue(applications.get(0).getScopePaths().keySet().contains(ScopePathType.ACTIVITIES_UPDATE.toString()));
         assertTrue(applications.get(0).getScopePaths().keySet().contains(ScopePathType.PERSON_READ_LIMITED.toString()));
-        
-        //Revoke them to check revoking one revokes all the ones with the same scopes
-        profileEntityManager.disableClientAccess(CLIENT_ID_1, USER_ORCID);
-        
+
+        orcidOauth2TokenDetailDao.disableClientAccessTokensByUserOrcid(USER_ORCID, CLIENT_ID_1);
+
         applications = profileEntityManager.getApplications(USER_ORCID);
         assertNotNull(applications);
         assertTrue(applications.isEmpty());
@@ -389,6 +380,8 @@ public class ProfileEntityManagerImplTest extends DBUnitTest {
     
     @Test
     public void testDontGetDuplicatedApplicationsSameScopes() {
+        // Be sure to remove all applications for that user and client
+        orcidOauth2TokenDetailDao.disableClientAccessTokensByUserOrcid(USER_ORCID, CLIENT_ID_1);
         Long seed = System.currentTimeMillis();
         Date expiration = new Date(System.currentTimeMillis() + 10000);
         createToken(CLIENT_ID_1, "token-1-" + seed, USER_ORCID, expiration, "/openid", false); // Displayed
@@ -398,17 +391,36 @@ public class ProfileEntityManagerImplTest extends DBUnitTest {
         List<ApplicationSummary> applications = profileEntityManager.getApplications(USER_ORCID);
         assertNotNull(applications);
         assertEquals(1, applications.size());
-        
-        //Revoke them to check revoking one revokes all the ones with the same scopes
-        profileEntityManager.disableClientAccess(CLIENT_ID_1, USER_ORCID);
-        
+
+        orcidOauth2TokenDetailDao.disableClientAccessTokensByUserOrcid(USER_ORCID, CLIENT_ID_1);
+
         applications = profileEntityManager.getApplications(USER_ORCID);
         assertNotNull(applications);
         assertEquals(0, applications.size());
     }
+
+    @Test
+    public void testUpdateDeprecation() throws Exception {
+        boolean result = profileEntityManager.updateDeprecation("0000-0000-0000-0004","4444-4444-4444-4441");
+        assertTrue(result);
+
+        ProfileEntity profile = profileEntityManager.findByOrcid("0000-0000-0000-0004");
+        assertEquals("4444-4444-4444-4441", profile.getPrimaryRecord().getId());
+    }
+
+    @Test
+    public void testIsReviewed() throws Exception {
+        profileEntityManager.reviewProfile("4444-4444-4444-4441");
+        boolean result = profileEntityManager.isReviewed("4444-4444-4444-4441");
+        assertTrue(result);
+
+        profileEntityManager.unreviewProfile("4444-4444-4444-4442");
+        result = profileEntityManager.isReviewed("4444-4444-4444-4442");
+        assertFalse(result);
+    }
     
     @Transactional
-    private OrcidOauth2TokenDetail createToken(String clientId, String tokenValue, String userOrcid, Date expirationDate, String scopes, boolean disabled) {
+    public OrcidOauth2TokenDetail createToken(String clientId, String tokenValue, String userOrcid, Date expirationDate, String scopes, boolean disabled) {
         OrcidOauth2TokenDetail token = new OrcidOauth2TokenDetail();
         token.setApproved(true);
         token.setClientDetailsId(clientId);

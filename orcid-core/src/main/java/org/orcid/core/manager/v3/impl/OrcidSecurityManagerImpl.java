@@ -1,6 +1,5 @@
 package org.orcid.core.manager.v3.impl;
 
-import java.security.AccessControlException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -10,8 +9,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-import javax.annotation.Resource;
-import javax.persistence.NoResultException;
+import jakarta.annotation.Resource;
+import jakarta.persistence.NoResultException;
 import javax.xml.datatype.XMLGregorianCalendar;
 
 import org.orcid.core.exception.DeactivatedException;
@@ -28,9 +27,8 @@ import org.orcid.core.manager.ClientDetailsEntityCacheManager;
 import org.orcid.core.manager.ProfileEntityCacheManager;
 import org.orcid.core.manager.v3.OrcidSecurityManager;
 import org.orcid.core.manager.v3.SourceManager;
-import org.orcid.core.oauth.OrcidOauth2TokenDetailService;
-import org.orcid.core.oauth.OrcidProfileUserDetails;
-import org.orcid.core.security.OrcidWebRole;
+import org.orcid.core.oauth.OrcidBearerTokenAuthentication;
+import org.orcid.core.security.OrcidUserDetailsService;
 import org.orcid.core.utils.SourceEntityUtils;
 import org.orcid.jaxb.model.clientgroup.ClientType;
 import org.orcid.jaxb.model.message.ScopePathType;
@@ -69,8 +67,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.provider.OAuth2Authentication;
-import org.springframework.security.oauth2.provider.OAuth2Request;
 
 /**
  * 
@@ -87,9 +83,6 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
 
     @Resource(name = "sourceManagerV3")
     private SourceManager sourceManager;
-
-    @Resource
-    private OrcidOauth2TokenDetailService orcidOauthTokenDetailService;
 
     @Resource
     private ProfileEntityCacheManager profileEntityCacheManager;
@@ -109,17 +102,15 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
     @Value("${org.orcid.core.baseUri}")
     private String baseUrl;
 
+    @Resource
+    private OrcidUserDetailsService orcidUserDetailsService;
+
+    @Resource
+    private SourceEntityUtils sourceEntityUtils;
+
     @Override
     public boolean isAdmin() {
-        Authentication authentication = getAuthentication();
-        if (authentication != null) {
-            Object details = authentication.getDetails();
-            if (details instanceof OrcidProfileUserDetails) {
-                OrcidProfileUserDetails userDetails = (OrcidProfileUserDetails) details;
-                return userDetails.getAuthorities().contains(OrcidWebRole.ROLE_ADMIN);
-            }
-        }
-        return false;
+        return orcidUserDetailsService.isAdmin();
     }
 
     @Override
@@ -127,22 +118,13 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         return sourceManager.isInDelegationMode() && !sourceManager.isDelegatedByAnAdmin();
     }
 
-    private Authentication getAuthentication() {
-        SecurityContext context = SecurityContextHolder.getContext();
-        if (context != null && context.getAuthentication() != null) {
-            return context.getAuthentication();
-        }
-        return null;
-    }
-
     @Override
     public String getClientIdFromAPIRequest() {
         SecurityContext context = SecurityContextHolder.getContext();
         Authentication authentication = context.getAuthentication();
-        if (authentication != null && OAuth2Authentication.class.isAssignableFrom(authentication.getClass())) {
-            OAuth2Authentication oAuth2Authentication = (OAuth2Authentication) authentication;
-            OAuth2Request request = oAuth2Authentication.getOAuth2Request();
-            return request.getClientId();
+        if (authentication != null && OrcidBearerTokenAuthentication.class.isAssignableFrom(authentication.getClass())) {
+            OrcidBearerTokenAuthentication authDetails = (OrcidBearerTokenAuthentication) authentication;
+            return authDetails.getClientId();
         }
         return null;
     }
@@ -228,7 +210,7 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
     @Override
     public void checkSourceAndThrow(SourceAwareEntity<?> existingEntity) {
         Source activeSource = sourceManager.retrieveActiveSource();
-        if (activeSource != null && !SourceEntityUtils.isTheSameForPermissionChecking(activeSource, existingEntity, clientDetailsEntityCacheManager)) {
+        if (activeSource != null && !sourceEntityUtils.isTheSameSource(activeSource, existingEntity)) {
             Map<String, String> params = new HashMap<String, String>();
             params.put("activity", "work");
             throw new WrongSourceException(params);
@@ -248,18 +230,28 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
 
     @Override
     public void checkScopes(ScopePathType... requiredScopes) {
-        // Verify the client is not a public client
-        checkClientType();
+        checkScopes(false, requiredScopes);
+    }
 
-        OAuth2Authentication oAuth2Authentication = getOAuth2Authentication();
-        OAuth2Request authorizationRequest = oAuth2Authentication.getOAuth2Request();
-        Set<ScopePathType> requestedScopes = ScopePathType.getScopesFromStrings(authorizationRequest.getScope());
-        for (ScopePathType scope : requestedScopes) {
-            for (ScopePathType requiredScope : requiredScopes)
-                if (scope.hasScope(requiredScope)) {
-                    return;
-                }
+    private void checkScopes(boolean tokenAlreadyChecked, ScopePathType... requiredScopes) {
+        // Verify the client is not a public client
+        if(!tokenAlreadyChecked) {
+            checkClientType();
         }
+
+        Authentication authentication = getAuthentication();
+        if (authentication != null) {
+            Set<String> allowedScopes = ((OrcidBearerTokenAuthentication) authentication).getScopes();
+            for (String scope : allowedScopes) {
+                ScopePathType allowed = ScopePathType.fromValue(scope);
+                for (ScopePathType requiredScope : requiredScopes) {
+                    if (allowed.hasScope(requiredScope)) {
+                        return;
+                    }
+                }
+            }
+        }
+
         throw new OrcidAccessControlException();
     }
 
@@ -308,12 +300,18 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
 
     @Override
     public void checkAndFilter(String orcid, ActivitiesSummary activities) {
+        checkAndFilter(orcid, activities, false);
+    }
+
+    private void checkAndFilter(String orcid, ActivitiesSummary activities, boolean tokenAlreadyChecked) {
         if (activities == null) {
             return;
         }
 
         // Check the token
-        isMyToken(orcid);
+        if(!tokenAlreadyChecked) {
+            isMyToken(orcid);
+        }
 
         // Distinctions
         if (activities.getDistinctions() != null) {
@@ -449,12 +447,18 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
 
     @Override
     public void checkAndFilter(String orcid, Person person) {
+        checkAndFilter(orcid, person, false);
+    }
+
+    private void checkAndFilter(String orcid, Person person, boolean tokenAlreadyChecked) {
         if (person == null) {
             return;
         }
 
         // Check the token
-        isMyToken(orcid);
+        if(!tokenAlreadyChecked) {
+            isMyToken(orcid);
+        }
 
         if (person.getAddresses() != null) {
             checkAndFilter(orcid, person.getAddresses().getAddress(), READ_BIO_REQUIRED_SCOPE, true);
@@ -507,11 +511,11 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         isMyToken(orcid);
 
         if (record.getActivitiesSummary() != null) {
-            checkAndFilter(orcid, record.getActivitiesSummary());
+            checkAndFilter(orcid, record.getActivitiesSummary(), true);
         }
 
         if (record.getPerson() != null) {
-            checkAndFilter(orcid, record.getPerson());
+            checkAndFilter(orcid, record.getPerson(), true);
         }
     }
 
@@ -523,10 +527,10 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         // be allowed
         boolean publicElementsOnly = false;
         try {
-            checkScopes(scopePathType);
+            checkScopes(true, scopePathType);
         } catch (OrcidAccessControlException e) {
             try {
-                checkScopes(ScopePathType.READ_PUBLIC);
+                checkScopes(true, ScopePathType.READ_PUBLIC);
                 publicElementsOnly = true;
             } catch (OrcidAccessControlException e2) {
                 throw e;
@@ -534,10 +538,9 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         }
 
         String clientId = null;
-        OAuth2Authentication oAuth2Authentication = getOAuth2Authentication();
-        if (oAuth2Authentication != null) {
-            OAuth2Request authorizationRequest = oAuth2Authentication.getOAuth2Request();
-            clientId = authorizationRequest.getClientId();
+        Authentication authentication = getAuthentication();
+        if (authentication != null) {
+            clientId = ((OrcidBearerTokenAuthentication) authentication).getClientId();
         }
 
         List<BulkElement> filteredElements = new ArrayList<>();
@@ -556,7 +559,7 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
                     continue;
                 }
 
-                if (work.retrieveSourcePath().equals(clientId)) {
+                if (work.retrieveSourcePath() != null && work.retrieveSourcePath().equals(clientId)) {
                     filteredElements.add(work);
                     continue;
                 }
@@ -583,7 +586,7 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         // Check the token belongs to the user
         isMyToken(orcid);
         // Check you have the required scopes
-        checkScopes(requiredScopes);
+        checkScopes(true, requiredScopes);
     }
 
     /**
@@ -641,7 +644,7 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         }
 
         try {
-            checkScopes(ScopePathType.EMAIL_READ_PRIVATE);
+            checkScopes(tokenAlreadyChecked, ScopePathType.EMAIL_READ_PRIVATE);
             return;
         } catch (OrcidAccessControlException oace) {
             checkAndFilter(orcid, (VisibilityType) email, READ_BIO_REQUIRED_SCOPE, true);
@@ -702,25 +705,11 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
             isMyToken(orcid);
         }
 
-        // Check if the client is the source of the element
-        if (element instanceof Filterable) {
-            Filterable filterable = (Filterable) element;
-            OAuth2Authentication oAuth2Authentication = getOAuth2Authentication();
-            if (oAuth2Authentication != null) {
-                OAuth2Request authorizationRequest = oAuth2Authentication.getOAuth2Request();
-                String clientId = authorizationRequest.getClientId();
-                if (clientId.equals(filterable.retrieveSourcePath())) {
-                    // The client doing the request is the source of the element
-                    return;
-                }
-            }
-        }
-
         // Check if the element is public and the token contains the
         // /read-public scope
         if (Visibility.PUBLIC.equals(element.getVisibility())) {
             try {
-                checkScopes(ScopePathType.READ_PUBLIC);
+                checkScopes(tokenAlreadyChecked, ScopePathType.READ_PUBLIC);
                 // This means it have ScopePathType.READ_PUBLIC scope, so, we
                 // can return it
                 return;
@@ -729,8 +718,26 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
             }
         }
 
-        // Filter
-        filter(element, requiredScope);
+        // Check if the client is the source of the element
+        if (element instanceof Filterable) {
+            Filterable filterable = (Filterable) element;
+            Authentication authentication = getAuthentication();
+            if (authentication != null) {
+                if(OrcidBearerTokenAuthentication.class.isAssignableFrom(authentication.getClass())) {
+                    String clientId = ((OrcidBearerTokenAuthentication) authentication).getClientId();
+                    if (clientId.equals(filterable.retrieveSourcePath())) {
+                        // The client doing the request is the source of the element
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Check the request have the required scope
+        checkScopes(tokenAlreadyChecked, requiredScope);
+
+        // Check element visibility
+        checkVisibility(element, requiredScope);
     }
 
     /**
@@ -763,14 +770,6 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         }
     }
 
-    private void filter(VisibilityType element, ScopePathType requiredScope) {
-        // Check the request have the required scope
-        checkScopes(requiredScope);
-
-        // Check element visibility
-        checkVisibility(element, requiredScope);
-    }
-
     private void checkVisibility(VisibilityType element, ScopePathType requiredScope) {
         if (requiredScope.isReadOnlyScope()) {
             if (Visibility.PRIVATE.equals(element.getVisibility())) {
@@ -781,73 +780,44 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         }
     }
 
-    private boolean isNonClientCredentialScope(OAuth2Authentication oAuth2Authentication) {
-        OAuth2Request authorizationRequest = oAuth2Authentication.getOAuth2Request();
-        Set<String> requestedScopes = ScopePathType.getCombinedScopesFromStringsAsStrings(authorizationRequest.getScope());
-        for (String scopeName : requestedScopes) {
-            ScopePathType scopePathType = ScopePathType.fromValue(scopeName);
-            if (!scopePathType.isClientCreditalScope()) {
-                return true;
+    //TODO: this method is doing exactly the same that the TokenTargetFilter does, so, lets review it and leave only one.
+    private void isMyToken(String orcid) {
+        Authentication authentication = getAuthentication();
+        if (authentication == null) {
+            throw new OrcidUnauthorizedException("No OAuth2 authentication found");
+        }
+
+        //Verify the client is not a public client
+        checkClientType();
+
+        if(OrcidBearerTokenAuthentication.class.isAssignableFrom(authentication.getClass())) {
+            OrcidBearerTokenAuthentication authDetails = (OrcidBearerTokenAuthentication) authentication;
+            String userOrcid = authDetails.getUserOrcid();
+            // Client credentials flow (no user ORCID) – allow through
+            if (userOrcid == null) {
+                Set<String> scopes = authDetails.getScopes();
+                if (scopes != null && scopes.contains(ScopePathType.ORCID_PROFILE_CREATE.value())) {
+                    ProfileEntity profile = profileEntityCacheManager.retrieve(orcid);
+                    if(profile != null) {
+                        String clientId = sourceManager.retrieveActiveSourceId();
+                        if(Boolean.TRUE.equals(profile.getClaimed()) || !clientIsProfileSource(clientId, profile)) {
+                            throw new IllegalStateException("Non client credential scope found in client request");
+                        }
+                    }
+                }
+                return;
+            }
+            if (orcid.equals(userOrcid)) {
+                return;
             }
         }
-        return false;
+        throw new OrcidUnauthorizedException("Access token is for a different record");
     }
 
     private boolean clientIsProfileSource(String clientId, ProfileEntity profile) {
         Boolean claimed = profile.getClaimed();
         SourceEntity source = profile.getSource();
         return source != null && (claimed == null || !claimed) && clientId.equals(SourceEntityUtils.getSourceId(source));
-    }
-
-    private OAuth2Authentication getOAuth2Authentication() {
-        SecurityContext context = SecurityContextHolder.getContext();
-        if (context != null && context.getAuthentication() != null) {
-            Authentication authentication = context.getAuthentication();
-            if (OAuth2Authentication.class.isAssignableFrom(authentication.getClass())) {
-                OAuth2Authentication oAuth2Authentication = (OAuth2Authentication) authentication;
-                return oAuth2Authentication;
-            } else {
-                for (GrantedAuthority grantedAuth : authentication.getAuthorities()) {
-                    if ("ROLE_ANONYMOUS".equals(grantedAuth.getAuthority())) {
-                        // Assume that anonymous authority is like not having
-                        // authority at all
-                        return null;
-                    }
-                }
-
-                throw new AccessControlException(
-                        "Cannot access method with authentication type " + authentication != null ? authentication.toString() : ", as it's null!");
-            }
-        } else {
-            throw new IllegalStateException("No security context found. This is bad!");
-        }
-    }
-
-    private void isMyToken(String orcid) {
-        OAuth2Authentication oAuth2Authentication = getOAuth2Authentication();
-        if (oAuth2Authentication == null) {
-            throw new OrcidUnauthorizedException("No OAuth2 authentication found");
-        }
-
-        // Verify the client is not a public client
-        checkClientType();
-
-        String clientId = sourceManager.retrieveActiveSourceId();
-        ProfileEntity profile = profileEntityCacheManager.retrieve(orcid);
-        Authentication userAuthentication = oAuth2Authentication.getUserAuthentication();
-        if (userAuthentication != null) {
-            Object principal = userAuthentication.getPrincipal();
-            if (principal instanceof ProfileEntity) {
-                ProfileEntity profileEntity = (ProfileEntity) principal;
-                if (!orcid.equals(profileEntity.getId())) {
-                    throw new OrcidUnauthorizedException("Access token is for a different record");
-                }
-            } else {
-                throw new OrcidUnauthorizedException("Missing user authentication");
-            }
-        } else if (isNonClientCredentialScope(oAuth2Authentication) && !clientIsProfileSource(clientId, profile)) {
-            throw new IllegalStateException("Non client credential scope found in client request");
-        }
     }
 
     private void checkClientType() {
@@ -858,26 +828,20 @@ public class OrcidSecurityManagerImpl implements OrcidSecurityManager {
         }
     }
 
-    @Override
-    public String getOrcidFromToken() {
-        OAuth2Authentication oAuth2Authentication = getOAuth2Authentication();
-        if (oAuth2Authentication == null) {
-            throw new OrcidUnauthorizedException("No OAuth2 authentication found");
-        }
-
-        checkScopes(ScopePathType.AUTHENTICATE);
-
-        Authentication userAuthentication = oAuth2Authentication.getUserAuthentication();
-        if (userAuthentication != null) {
-            Object principal = userAuthentication.getPrincipal();
-            if (principal instanceof ProfileEntity) {
-                ProfileEntity profileEntity = (ProfileEntity) principal;
-                return profileEntity.getId();
-            } else {
-                throw new OrcidUnauthorizedException("Missing user authentication");
+    private Authentication getAuthentication() {
+        SecurityContext context = SecurityContextHolder.getContext();
+        if (context != null && context.getAuthentication() != null) {
+            Authentication authentication = context.getAuthentication();
+            for (GrantedAuthority grantedAuth : authentication.getAuthorities()) {
+                if ("ROLE_ANONYMOUS".equals(grantedAuth.getAuthority())) {
+                    // Assume that anonymous authority is like not having
+                    // authority at all
+                    return null;
+                }
             }
+            return authentication;
         } else {
-            throw new IllegalStateException("Non client credential scope found in client request");
+            throw new IllegalStateException("No security context found. This is bad!");
         }
     }
 }

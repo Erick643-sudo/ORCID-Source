@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.orcid.core.exception.InvalidDisambiguatedOrgException;
 import org.orcid.core.manager.v3.OrgManager;
@@ -153,12 +153,14 @@ public class OrgManagerImpl implements OrgManager {
     }
 
     private OrgEntity getOrgEntity(org.orcid.jaxb.model.v3.release.common.Organization organization) {
+        if (organization == null)
+            return null;
         OrgEntity orgEntity = new OrgEntity();
         orgEntity.setName(organization.getName().trim());
         org.orcid.jaxb.model.v3.release.common.OrganizationAddress address = organization.getAddress();
-        orgEntity.setCity(address.getCity().trim());
+        orgEntity.setCity(address.getCity() !=null? address.getCity().trim():"");
         orgEntity.setRegion(address.getRegion() != null ? address.getRegion().trim() : "");
-        orgEntity.setCountry(address.getCountry().name());
+        orgEntity.setCountry(address.getCountry() !=null? address.getCountry().name(): "");
 
         if (organization.getDisambiguatedOrganization() != null && organization.getDisambiguatedOrganization().getDisambiguatedOrganizationIdentifier() != null) {
             // if disambiguated org is present (must be for v3 API, but not UI)

@@ -2,10 +2,10 @@ package org.orcid.frontend.web.controllers;
 
 import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.ws.rs.Produces;
-import javax.ws.rs.core.MediaType;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
 
 import org.orcid.core.locale.LocaleManager;
 import org.orcid.core.manager.StatusManager;
@@ -33,7 +33,7 @@ public class StatusController {
     @Resource
     private StatusManager statusManager;
     
-    @RequestMapping(value = "/tomcatUp.json")
+    @RequestMapping(value = {"/tomcatUp.json", "/ping"})
     @Produces(value = { MediaType.APPLICATION_JSON })
     public @ResponseBody
     String tomcatUp(HttpServletRequest request) {

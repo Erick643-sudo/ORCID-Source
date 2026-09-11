@@ -1,16 +1,16 @@
 package org.orcid.persistence.jpa.entities;
 
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.SequenceGenerator;
-import javax.persistence.Table;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.SequenceGenerator;
+import jakarta.persistence.Table;
 
 import org.orcid.utils.NullUtils;
 
@@ -37,6 +37,7 @@ public class OrgAffiliationRelationEntity extends SourceAwareEntity<Long> implem
     private String url;
     private String externalIdentifiersJson;
     protected Long displayIndex;
+    private Boolean featured;
 
     @Override
     @Id
@@ -145,6 +146,15 @@ public class OrgAffiliationRelationEntity extends SourceAwareEntity<Long> implem
 
     public void setDisplayIndex(Long displayIndex) {
         this.displayIndex = displayIndex;
+    }
+    
+    @Column(name = "featured")
+    public Boolean getFeatured() {
+        return featured;
+    }
+    
+    public void setFeatured(Boolean featured) {
+        this.featured = featured;
     }
 
     @Override

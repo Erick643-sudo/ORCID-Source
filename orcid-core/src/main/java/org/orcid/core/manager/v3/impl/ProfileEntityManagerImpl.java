@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.commons.lang.StringUtils;
 import org.orcid.core.common.manager.EmailFrequencyManager;
@@ -22,37 +22,21 @@ import org.orcid.core.manager.impl.OrcidUrlManager;
 import org.orcid.core.manager.v3.*;
 import org.orcid.core.manager.v3.read_only.RecordNameManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.impl.ProfileEntityManagerReadOnlyImpl;
-import org.orcid.core.oauth.OrcidOauth2TokenDetailService;
 import org.orcid.core.profile.history.ProfileHistoryEventType;
+import org.orcid.core.utils.cache.redis.RedisClient;
 import org.orcid.jaxb.model.clientgroup.MemberType;
 import org.orcid.jaxb.model.common.AvailableLocales;
 import org.orcid.jaxb.model.message.ScopePathType;
 import org.orcid.jaxb.model.v3.release.common.CreditName;
 import org.orcid.jaxb.model.v3.release.common.Visibility;
-import org.orcid.jaxb.model.v3.release.notification.amended.AmendedSection;
-import org.orcid.jaxb.model.v3.release.record.Address;
-import org.orcid.jaxb.model.v3.release.record.Addresses;
 import org.orcid.jaxb.model.v3.release.record.Biography;
 import org.orcid.jaxb.model.v3.release.record.Email;
 import org.orcid.jaxb.model.v3.release.record.Emails;
 import org.orcid.jaxb.model.v3.release.record.FamilyName;
 import org.orcid.jaxb.model.v3.release.record.GivenNames;
-import org.orcid.jaxb.model.v3.release.record.Keyword;
-import org.orcid.jaxb.model.v3.release.record.Keywords;
 import org.orcid.jaxb.model.v3.release.record.Name;
-import org.orcid.jaxb.model.v3.release.record.OtherName;
-import org.orcid.jaxb.model.v3.release.record.OtherNames;
-import org.orcid.jaxb.model.v3.release.record.PersonExternalIdentifier;
-import org.orcid.jaxb.model.v3.release.record.PersonExternalIdentifiers;
-import org.orcid.jaxb.model.v3.release.record.ResearcherUrl;
-import org.orcid.jaxb.model.v3.release.record.ResearcherUrls;
-import org.orcid.persistence.dao.BackupCodeDao;
-import org.orcid.persistence.dao.ProfileLastModifiedDao;
-import org.orcid.persistence.dao.UserConnectionDao;
-import org.orcid.persistence.jpa.entities.ClientDetailsEntity;
-import org.orcid.persistence.jpa.entities.IndexingStatus;
-import org.orcid.persistence.jpa.entities.OrcidOauth2TokenDetail;
-import org.orcid.persistence.jpa.entities.ProfileEntity;
+import org.orcid.persistence.dao.*;
+import org.orcid.persistence.jpa.entities.*;
 import org.orcid.pojo.ApplicationSummary;
 import org.orcid.pojo.ajaxForm.Claim;
 import org.orcid.pojo.ajaxForm.PojoUtil;
@@ -60,6 +44,7 @@ import org.orcid.pojo.ajaxForm.Reactivation;
 import org.orcid.pojo.ajaxForm.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.NoSuchMessageException;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
@@ -82,9 +67,6 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
     @Resource(name = "peerReviewManagerV3")
     private PeerReviewManager peerReviewManager;
 
-    @Resource
-    private ProfileEntityCacheManager profileEntityCacheManager;
-
     @Resource(name = "workManagerV3")
     private WorkManager workManager;
 
@@ -94,20 +76,20 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
     @Resource
     private EncryptionManager encryptionManager;
 
-    @Resource(name = "addressManagerV3")
-    private AddressManager addressManager;
+    @Resource(name = "addressDao")
+    protected AddressDao addressDao;
 
-    @Resource(name = "externalIdentifierManagerV3")
-    private ExternalIdentifierManager externalIdentifierManager;
+    @Resource(name = "externalIdentifierDao")
+    private ExternalIdentifierDao externalIdentifierDao;
 
-    @Resource(name = "profileKeywordManagerV3")
-    private ProfileKeywordManager profileKeywordManager;
+    @Resource(name = "profileKeywordDao")
+    private ProfileKeywordDao profileKeywordDao;
 
-    @Resource(name = "otherNameManagerV3")
-    private OtherNameManager otherNameManager;
+    @Resource(name = "otherNameDao")
+    private OtherNameDao otherNameDao;
 
-    @Resource(name = "researcherUrlManagerV3")
-    private ResearcherUrlManager researcherUrlManager;
+    @Resource(name = "researcherUrlDao")
+    private ResearcherUrlDao researcherUrlDao;
 
     @Resource(name = "emailManagerV3")
     private EmailManager emailManager;
@@ -122,13 +104,7 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
     private NotificationManager notificationManager;
 
     @Resource
-    private OrcidOauth2TokenDetailService orcidOauth2TokenService;
-
-    @Resource
     private ClientDetailsEntityCacheManager clientDetailsEntityCacheManager;
-
-    @Resource
-    private OrcidUrlManager orcidUrlManager;
 
     @Resource
     private LocaleManager localeManager;
@@ -141,9 +117,6 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
     
     @Resource
     private TransactionTemplate transactionTemplate;
-
-    @Resource
-    private OrcidOauth2TokenDetailService orcidOauth2TokenDetailService;
 
     @Resource(name = "profileHistoryEventManagerV3")
     private ProfileHistoryEventManager profileHistoryEventManager;
@@ -162,6 +135,15 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
     @Resource
     private ProfileEmailDomainManager profileEmailDomainManager;
+
+    @Resource(name="orcidOauth2TokenDetailDaoReadOnly")
+    private OrcidOauth2TokenDetailDao orcidOauth2TokenDetailDaoReadOnly;
+
+    @Resource(name="orcidOauth2TokenDetailDao")
+    private OrcidOauth2TokenDetailDao orcidOauth2TokenDetailDao;
+
+    @Resource
+    private RedisClient redisClient;
 
     @Override
     public boolean orcidExists(String orcid) {
@@ -190,7 +172,6 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
                 // If it was successfully deprecated
                 if (wasDeprecated) {
                     LOGGER.info("Account {} was deprecated to primary account: {}", deprecatedOrcid, primaryOrcid);
-                    clearRecord(deprecatedOrcid, false);
                     // Move all email's to the primary record
                     Emails deprecatedAccountEmails = emailManager.getEmails(deprecatedOrcid);
                     if (deprecatedAccountEmails != null) {
@@ -202,6 +183,14 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
                             emailManager.moveEmailToOtherAccount(email.getEmail(), deprecatedOrcid, primaryOrcid);
                         }
                     }
+                    List<ProfileEmailDomainEntity> deprecatedEmailDomains = profileEmailDomainManager.getEmailDomains(deprecatedOrcid);
+                    if (deprecatedEmailDomains != null && !deprecatedEmailDomains.isEmpty()) {
+                        for (ProfileEmailDomainEntity emailDomain : deprecatedEmailDomains) {
+                            profileEmailDomainManager.moveEmailDomainToAnotherAccount(emailDomain.getEmailDomain(), deprecatedOrcid, primaryOrcid);
+                        }
+                    }
+                    // important to run this after moving domains, as this function will delete the domains from the database
+                    clearRecord(deprecatedOrcid, false);
 
                     profileLastModifiedDao.updateLastModifiedDateAndIndexingStatus(deprecatedOrcid, IndexingStatus.REINDEX);
                     return true;
@@ -218,7 +207,6 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
                 LOGGER.info("About to deactivate record {}", orcid);                
                 clearRecord(orcid, true);
                 emailManager.hideAllEmails(orcid);
-                notificationManager.sendAmendEmail(orcid, AmendedSection.UNKNOWN, null);
                 profileDao.deactivate(orcid);
                 LOGGER.info("Record {} successfully deactivated", orcid);
                 return true;                
@@ -228,7 +216,12 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
     @Override
     public boolean enableDeveloperTools(String orcid) {
-        return profileDao.updateDeveloperTools(orcid, true);
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.updateDeveloperTools(orcid, true);
+            }
+        });
     }
 
     /**
@@ -240,7 +233,12 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
      */
     @Override
     public boolean disableDeveloperTools(String orcid) {
-        return profileDao.updateDeveloperTools(orcid, false);
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.updateDeveloperTools(orcid, false);
+            }
+        });
     }
 
     @Override
@@ -286,23 +284,33 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
     }
 
     @Override
+    public boolean isReviewed(String orcid) {
+        return profileDao.isReviewed(orcid);
+    }
+
+    @Override
     public boolean reviewProfile(String orcid) {
-        return profileDao.reviewProfile(orcid);
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.reviewProfile(orcid);
+            }
+        });
     }
 
     @Override
     public boolean unreviewProfile(String orcid) {
-        return profileDao.unreviewProfile(orcid);
-    }
-
-    @Override
-    public void disableClientAccess(String clientDetailsId, String userOrcid) {
-        orcidOauth2TokenService.disableClientAccess(clientDetailsId, userOrcid);
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.unreviewProfile(orcid);
+            }
+        });
     }
 
     @Override
     public List<ApplicationSummary> getApplications(String orcid) {
-        List<OrcidOauth2TokenDetail> tokenDetails = orcidOauth2TokenService.findByUserName(orcid);
+        List<OrcidOauth2TokenDetail> tokenDetails = orcidOauth2TokenDetailDaoReadOnly.findByUserName(orcid);
         Map<String, ApplicationSummary> distinctApplications = new HashMap<>();
         for (OrcidOauth2TokenDetail token : tokenDetails) {
             if ((token.getTokenDisabled() == null || !token.getTokenDisabled()) && token.getOboClientDetailsId() == null) {
@@ -390,7 +398,6 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
         }
         // Update profile entity in the DB
         profileDao.merge(profile);
-        profileDao.flush();
         
         // Update the visibility for every bio element to the visibility
         // selected by the user
@@ -398,39 +405,19 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
         Visibility defaultVisibility = claim.getActivitiesVisibilityDefault().getVisibility();
         
         // Update address
-        Addresses addresses = addressManager.getAddresses(orcid);
-        for(Address address : addresses.getAddress()) {
-            address.setVisibility(defaultVisibility);
-            addressManager.updateAddress(orcid, address.getPutCode(), address, false);
-        }        
+        addressDao.updateVisibility(orcid, defaultVisibility);
 
         // Update the keywords
-        Keywords keywords = profileKeywordManager.getKeywords(orcid); 
-        for(Keyword keyword : keywords.getKeywords()) {
-            keyword.setVisibility(defaultVisibility);
-            profileKeywordManager.updateKeyword(orcid, keyword.getPutCode(), keyword, false);
-        }
+        profileKeywordDao.updateVisibility(orcid, defaultVisibility);
 
         // Update the other names
-        OtherNames otherNames = otherNameManager.getOtherNames(orcid);
-        for(OtherName otherName : otherNames.getOtherNames()) {
-            otherName.setVisibility(defaultVisibility);
-            otherNameManager.updateOtherName(orcid, otherName.getPutCode(), otherName, false);
-        }
+        otherNameDao.updateVisibility(orcid, defaultVisibility);
 
         // Update the researcher urls
-        ResearcherUrls researcherUrls = researcherUrlManager.getResearcherUrls(orcid);
-        for(ResearcherUrl researcherUrl : researcherUrls.getResearcherUrls()) {
-            researcherUrl.setVisibility(defaultVisibility);
-            researcherUrlManager.updateResearcherUrl(orcid, researcherUrl, false);
-        }
+        researcherUrlDao.updateVisibility(orcid, defaultVisibility);
 
         // Update the external identifiers
-        PersonExternalIdentifiers extIds = externalIdentifierManager.getExternalIdentifiers(orcid);
-        for(PersonExternalIdentifier extId : extIds.getExternalIdentifiers()) {
-            extId.setVisibility(defaultVisibility);
-            externalIdentifierManager.updateExternalIdentifier(orcid, extId, false);
-        }        
+        externalIdentifierDao.updateVisibility(orcid, defaultVisibility);
 
         // Update the biography
         if (biographyManager.exists(orcid)) {
@@ -458,7 +445,13 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
     @Override
     public void updateLocale(String orcid, AvailableLocales locale) {
-        profileDao.updateLocale(orcid, locale.name());
+        transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                profileDao.updateLocale(orcid, locale.name());
+                return true;
+            }
+        });
     }
 
     @Override
@@ -531,9 +524,15 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
     @Override
     public void updatePassword(String orcid, String password) {
-        String encryptedPassword = encryptionManager.hashForInternalUse(password);
-        profileDao.changeEncryptedPassword(orcid, encryptedPassword);
-        profileHistoryEventManager.recordEvent(ProfileHistoryEventType.RESET_PASSWORD, orcid);
+        transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                String encryptedPassword = encryptionManager.hashForInternalUse(password);
+                profileDao.changeEncryptedPassword(orcid, encryptedPassword);
+                profileHistoryEventManager.recordEvent(ProfileHistoryEventType.RESET_PASSWORD, orcid);
+                return true;
+            }
+        });
     }
 
     @Override
@@ -543,7 +542,13 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
     @Override
     public void updateLastLoginDetails(String orcid, String ipAddress) {
-        profileDao.updateLastLoginDetails(orcid, ipAddress);
+        transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                profileDao.updateLastLoginDetails(orcid, ipAddress);
+                return true;
+            }
+        });
     }
 
     @Override
@@ -560,7 +565,12 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
      */
     @Override
     public boolean lockProfile(String orcid, String lockReason, String description, String adminUser) {
-        return profileDao.lockProfile(orcid, lockReason, description, adminUser);
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.lockProfile(orcid, lockReason, description, adminUser);
+            }
+        });
     }
 
     /**
@@ -572,7 +582,12 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
      */
     @Override
     public boolean unlockProfile(String orcid) {
-        return profileDao.unlockProfile(orcid);
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.unlockProfile(orcid);
+            }
+        });
     }
 
     @Override
@@ -580,20 +595,51 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
         return profileDao.getLastLogin(orcid);
     }
 
+    @Override
     public void startSigninLock(String orcid) {
-        profileDao.startSigninLock(orcid);
+        transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                profileDao.startSigninLock(orcid);
+                return true;
+            }
+        });
     }
     
+    @Override
     public void resetSigninLock(String orcid) {
-        profileDao.resetSigninLock(orcid);
+        transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                profileDao.resetSigninLock(orcid);
+                return true;
+            }
+        });
     }
     
+    @Override
     public void updateSigninLock(String orcid, Integer count) {
-        profileDao.updateSigninLock(orcid, count);
+        transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                profileDao.updateSigninLock(orcid, count);
+                return true;
+            }
+        });
     }
     
     public List<Object[]> getSigninLock(String orcid) {
         return profileDao.getSigninLock(orcid);
+    }
+
+    @Override
+    public boolean updateDeprecation(String deprecated, String primary) {
+        return transactionTemplate.execute(new TransactionCallback<Boolean>() {
+            @Override
+            public Boolean doInTransaction(TransactionStatus status) {
+                return profileDao.updateDeprecation(deprecated, primary);
+            }
+        });
     }
 
     /**
@@ -616,19 +662,19 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
         researchResourceManager.removeAllResearchResources(orcid);
 
         // Remove addresses
-        addressManager.removeAllAddress(orcid);
+        addressDao.removeAllAddress(orcid);
 
         // Remove external identifiers
-        externalIdentifierManager.removeAllExternalIdentifiers(orcid);
+        externalIdentifierDao.removeAllExternalIdentifiers(orcid);
 
         // Remove researcher urls
-        researcherUrlManager.removeAllResearcherUrls(orcid);
+        researcherUrlDao.removeAllResearcherUrls(orcid);
 
         // Remove other names
-        otherNameManager.removeAllOtherNames(orcid);
+        otherNameDao.removeAllOtherNames(orcid);
 
         // Remove keywords
-        profileKeywordManager.removeAllKeywords(orcid);
+        profileKeywordDao.removeAllKeywords(orcid);
 
         // Admin disabling 2FA, so, we should not notify the user
         profileDao.disable2FA(orcid);
@@ -639,6 +685,10 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
         // remove trusted individuals
         givenPermissionToManager.removeAllForProfile(orcid);
+
+        // remove email domains
+        // NOTE: when deprecating, the domains get moved to the other record before this code is executed
+        profileEmailDomainManager.removeAllEmailDomains(orcid);
 
         // Remove biography
         if (biographyManager.exists(orcid)) {
@@ -664,7 +714,7 @@ public class ProfileEntityManagerImpl extends ProfileEntityManagerReadOnlyImpl i
 
         if (disableTokens) {
             // Disable any token that belongs to this record
-            orcidOauth2TokenDetailService.disableAccessTokenByUserOrcid(orcid, RevokeReason.RECORD_DEACTIVATED);
+            orcidOauth2TokenDetailDao.disableAccessTokenByUserOrcid(orcid, RevokeReason.RECORD_DEACTIVATED.name());
         }
 
         // Change default visibility to private

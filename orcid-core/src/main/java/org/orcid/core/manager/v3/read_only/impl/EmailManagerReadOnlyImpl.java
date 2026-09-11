@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.commons.lang3.StringUtils;
 import org.orcid.core.adapter.v3.JpaJaxbEmailAdapter;
@@ -27,6 +27,7 @@ import org.orcid.pojo.ajaxForm.PojoUtil;
 import org.orcid.utils.OrcidStringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.Cacheable;
 
 /**
  * 
@@ -113,14 +114,14 @@ public class EmailManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements
         try {
             String primaryEmail = emailDao.findPrimaryEmail(orcid).getEmail();
             return emailDao.isVerified(orcid, primaryEmail);
-        } catch (javax.persistence.NoResultException nre) {
+        } catch (jakarta.persistence.NoResultException nre) {
             String alternativePrimaryEmail = emailDao.findNewestVerifiedOrNewestEmail(orcid);
             emailDao.updatePrimary(orcid, alternativePrimaryEmail);
             
             String message = String.format("User with orcid %s have no primary email, so, we are setting the newest verified email, or, the newest email in case non is verified as the primary one", orcid);
             LOGGER.error(message);            
             throw nre;
-        } catch (javax.persistence.NonUniqueResultException nure) {
+        } catch (jakarta.persistence.NonUniqueResultException nure) {
             String alternativePrimaryEmail = emailDao.findNewestPrimaryEmail(orcid);
             emailDao.updatePrimary(orcid, alternativePrimaryEmail);
             
@@ -185,7 +186,17 @@ public class EmailManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements
         }
         return jpaJaxbEmailAdapter.toEmail(emailDao.findPrimaryEmail(orcid));
     }
-    
+
+    @Override
+    @Cacheable("primary-email-value")
+    public String findPrimaryEmailValueFromCache(String orcid) {
+        if(PojoUtil.isEmpty(orcid)) {
+            return null;
+        }
+        EmailEntity entity = emailDao.findPrimaryEmail(orcid);
+        return entity.getEmail();
+    }
+
     @Override
     public boolean isUsersOnlyEmail(String orcid, String email) {
         List<EmailEntity> emails = emailDao.findByOrcid(orcid, getLastModified(orcid));

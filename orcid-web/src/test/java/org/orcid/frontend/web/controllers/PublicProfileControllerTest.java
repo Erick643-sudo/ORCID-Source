@@ -13,9 +13,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.apache.commons.lang.time.DateUtils;
 import org.junit.AfterClass;
@@ -30,7 +30,6 @@ import org.orcid.core.locale.LocaleManager;
 import org.orcid.core.manager.EncryptionManager;
 import org.orcid.core.manager.ProfileEntityCacheManager;
 import org.orcid.core.manager.v3.read_only.ProfileEntityManagerReadOnly;
-import org.orcid.core.oauth.OrcidOauth2TokenDetailService;
 import org.orcid.jaxb.model.common.Iso3166Country;
 import org.orcid.jaxb.model.v3.release.common.Visibility;
 import org.orcid.jaxb.model.v3.release.record.Address;
@@ -52,6 +51,8 @@ import org.orcid.test.OrcidJUnit4ClassRunner;
 import org.orcid.test.TargetProxyHelper;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.MethodNotAllowedException;
 import org.springframework.web.servlet.ModelAndView;
 
@@ -92,6 +93,9 @@ public class PublicProfileControllerTest extends DBUnitTest {
     
     @Resource
     private EncryptionManager encryptionManager;
+
+    @Resource(name = "transactionManager")
+    private PlatformTransactionManager transactionManager;
     
     @Mock
     private HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
@@ -101,9 +105,6 @@ public class PublicProfileControllerTest extends DBUnitTest {
     
     @Mock
     private ProfileEntityCacheManager profileEntityCacheManagerMock;
-    
-    @Mock
-    private OrcidOauth2TokenDetailService orcidOauth2TokenServiceMock;
     
     @Mock
     private ProfileEntityManagerReadOnly profileEntityManagerReadOnlyMock;
@@ -239,11 +240,16 @@ public class PublicProfileControllerTest extends DBUnitTest {
     
     @Test
     public void testViewClaimedUserWhenIsLongEnough() {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+
         //Update the submission date so it is long enough
-        ProfileEntity profileEntity = profileDao.find(unclaimedUserOrcid);
-        profileEntity.setSubmissionDate(DateUtils.addDays(new Date(), -10));
-        profileDao.merge(profileEntity);
-        profileDao.flush();
+        transactionTemplate.execute(status -> {
+            ProfileEntity profileEntity = profileDao.find(unclaimedUserOrcid);
+            profileEntity.setSubmissionDate(DateUtils.addDays(new Date(), -10));
+            profileDao.merge(profileEntity);
+            profileDao.flush();
+            return null;
+        });
         ModelAndView mav = publicProfileController.publicPreview(request, response, 1, 0, 15, unclaimedUserOrcid);        
         assertEquals("public_profile_v3", mav.getViewName());
         Map<String, Object> model = mav.getModel();
@@ -255,10 +261,13 @@ public class PublicProfileControllerTest extends DBUnitTest {
         assertFalse(model.containsKey("noIndex"));
         
         //Update the submission date so it is not long enough
-        profileEntity = profileDao.find(unclaimedUserOrcid);
-        profileEntity.setSubmissionDate(new Date());
-        profileDao.merge(profileEntity);
-        profileDao.flush();
+        transactionTemplate.execute(status -> {
+            ProfileEntity profileEntity = profileDao.find(unclaimedUserOrcid);
+            profileEntity.setSubmissionDate(new Date());
+            profileDao.merge(profileEntity);
+            profileDao.flush();
+            return null;
+        });
     }
     
     @Test
@@ -393,7 +402,6 @@ public class PublicProfileControllerTest extends DBUnitTest {
     
     private void setupUserInfoMocks() {
         SourceEntity sourceEntity = new SourceEntity(new ClientDetailsEntity("APP-000000000001"));
-        TargetProxyHelper.injectIntoProxy(publicProfileController, "orcidOauth2TokenService", orcidOauth2TokenServiceMock);
         TargetProxyHelper.injectIntoProxy(publicProfileController, "profileEntityCacheManager", profileEntityCacheManagerMock);
         TargetProxyHelper.injectIntoProxy(publicProfileController, "profileEntityManagerReadOnly", profileEntityManagerReadOnlyMock);
         
@@ -407,7 +415,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         reviewedNoIntegrations.setRecordLocked(false);
         reviewedNoIntegrations.setReviewed(true);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(reviewedNoIntegrationsOrcid), anyLong())).thenReturn(false);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(reviewedNoIntegrationsOrcid), anyLong())).thenReturn(false);
         when(profileEntityCacheManagerMock.retrieve(reviewedNoIntegrationsOrcid)).thenReturn(reviewedNoIntegrations);        
         
         // Reviewed record with integrations
@@ -415,7 +423,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         reviewedWithIntegrations.setRecordLocked(false);
         reviewedWithIntegrations.setReviewed(true);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(reviewedWithIntegrationsOrcid), anyLong())).thenReturn(true);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(reviewedWithIntegrationsOrcid), anyLong())).thenReturn(true);
         when(profileEntityCacheManagerMock.retrieve(reviewedWithIntegrationsOrcid)).thenReturn(reviewedWithIntegrations);
         
         // Un-reviewed record with no integrations
@@ -423,7 +431,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         unreviewedNoIntegrations.setRecordLocked(false);
         unreviewedNoIntegrations.setReviewed(false);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(unreviewedNoIntegrationsOrcid), anyLong())).thenReturn(false);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(unreviewedNoIntegrationsOrcid), anyLong())).thenReturn(false);
         when(profileEntityCacheManagerMock.retrieve(unreviewedNoIntegrationsOrcid)).thenReturn(unreviewedNoIntegrations);
         
         // Un-reviewed record with integrations
@@ -431,7 +439,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         unreviewedWithIntegrations.setRecordLocked(false);
         unreviewedWithIntegrations.setReviewed(false);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(unreviewedWithIntegrationsOrcid), anyLong())).thenReturn(true);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(unreviewedWithIntegrationsOrcid), anyLong())).thenReturn(true);
         when(profileEntityCacheManagerMock.retrieve(unreviewedWithIntegrationsOrcid)).thenReturn(unreviewedWithIntegrations);
         
         // Un reviewed record, created by member, with no integrations and no activities
@@ -440,7 +448,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         unreviewedWithIntegrations.setRecordLocked(false);
         unreviewedWithIntegrations.setReviewed(false);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(unreviewedCreatedByMembersWithNoActivitiesOrcid), anyLong())).thenReturn(false);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(unreviewedCreatedByMembersWithNoActivitiesOrcid), anyLong())).thenReturn(false);
         when(profileEntityCacheManagerMock.retrieve(eq(unreviewedCreatedByMembersWithNoActivitiesOrcid))).thenReturn(unreviewedCreatedByMembersWithNoActivities);
         
         
@@ -450,7 +458,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         unreviewedWithIntegrations.setRecordLocked(false);
         unreviewedWithIntegrations.setReviewed(false);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(unreviewedCreatedByMembersWithActivitiesOrcid), anyLong())).thenReturn(false);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(unreviewedCreatedByMembersWithActivitiesOrcid), anyLong())).thenReturn(false);
         when(profileEntityCacheManagerMock.retrieve(eq(unreviewedCreatedByMembersWithActivitiesOrcid))).thenReturn(unreviewedCreatedByMembersWithActivities);
         
         // Deprecated 
@@ -459,7 +467,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         deprecated.setReviewed(true);
         deprecated.setPrimaryRecord(new ProfileEntity(primaryRecord));
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(deprecatedUserOrcid), anyLong())).thenReturn(true);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(deprecatedUserOrcid), anyLong())).thenReturn(true);
         when(profileEntityCacheManagerMock.retrieve(deprecatedUserOrcid)).thenReturn(deprecated);
         
         // Locked
@@ -467,7 +475,7 @@ public class PublicProfileControllerTest extends DBUnitTest {
         locked.setRecordLocked(true);
         locked.setReviewed(true);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(lockedUserOrcid), anyLong())).thenReturn(true);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(lockedUserOrcid), anyLong())).thenReturn(true);
         when(profileEntityCacheManagerMock.retrieve(lockedUserOrcid)).thenReturn(locked);
         
         
@@ -476,7 +484,36 @@ public class PublicProfileControllerTest extends DBUnitTest {
         allOk.setRecordLocked(false);
         allOk.setReviewed(true);
         
-        when(orcidOauth2TokenServiceMock.hasToken(eq(userOrcid), anyLong())).thenReturn(true);
+        when(profileEntityManagerReadOnlyMock.hasToken(eq(userOrcid), anyLong())).thenReturn(true);
         when(profileEntityCacheManagerMock.retrieve(userOrcid)).thenReturn(allOk);        
+    }
+
+    @Test
+    public void publicPreview_getInvalidRecordGenerateRedirectTest() {
+        String a = "0000-0000-0000-0000";
+        String b = "0000-0000-0000-0000-0000";
+        String c = " 0000-0000-0000-0000";
+        String d = "0000-0000-0000-0000 ";
+        TargetProxyHelper.injectIntoProxy(publicProfileController, "profileEntityCacheManager", profileEntityCacheManagerMock);
+        when(profileEntityCacheManagerMock.retrieve(a)).thenThrow(new IllegalArgumentException());
+        when(profileEntityCacheManagerMock.retrieve(b)).thenThrow(new IllegalArgumentException());
+        when(profileEntityCacheManagerMock.retrieve(c)).thenThrow(new IllegalArgumentException());
+        when(profileEntityCacheManagerMock.retrieve(d)).thenThrow(new IllegalArgumentException());
+
+        // Test non-existing record
+        ModelAndView mv = publicProfileController.publicPreview(request, response, 0, 0, 0, a);
+        assertEquals("redirect:https://testserver.orcid.org/404", mv.getViewName());
+
+        // Test invalid id
+        mv = publicProfileController.publicPreview(request, response, 0, 0, 0, b);
+        assertEquals("redirect:https://testserver.orcid.org/404", mv.getViewName());
+
+        // Test trailing invalid charcter
+        mv = publicProfileController.publicPreview(request, response, 0, 0, 0, c);
+        assertEquals("redirect:https://testserver.orcid.org/404", mv.getViewName());
+
+        // Test leading invalid charcter
+        mv = publicProfileController.publicPreview(request, response, 0, 0, 0, d);
+        assertEquals("redirect:https://testserver.orcid.org/404", mv.getViewName());
     }
 }

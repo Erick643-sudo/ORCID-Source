@@ -10,9 +10,9 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 
-import javax.annotation.Resource;
-import javax.persistence.NoResultException;
-import javax.ws.rs.core.Response;
+import jakarta.annotation.Resource;
+import jakarta.persistence.NoResultException;
+import jakarta.ws.rs.core.Response;
 
 import org.apache.commons.lang.time.DateUtils;
 import org.junit.AfterClass;
@@ -63,6 +63,8 @@ import org.orcid.test.DBUnitTest;
 import org.orcid.test.OrcidJUnit4ClassRunner;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 
 @RunWith(OrcidJUnit4ClassRunner.class)
@@ -78,6 +80,9 @@ public class MemberV3ApiServiceDelegatorErrorsTest extends DBUnitTest {
 
     @Resource
     private ProfileDao profileDao;
+
+    @Resource
+    private PlatformTransactionManager transactionManager;
 
     @Value("${org.orcid.core.works.bulk.read.max:100}")
     private Long bulkReadSize;
@@ -1654,6 +1659,9 @@ public class MemberV3ApiServiceDelegatorErrorsTest extends DBUnitTest {
                                                                      // work not
                                                                      // matching
                                                                      // source
+        assertEquals("/0000-0000-0000-0003/work/11", ((Work) workBulk.getBulk().get(0)).getPath());
+        assertEquals("/0000-0000-0000-0003/work/12", ((Work) workBulk.getBulk().get(1)).getPath());
+        assertEquals("/0000-0000-0000-0003/work/13", ((Work) workBulk.getBulk().get(2)).getPath());
     }
 
     @Test
@@ -2080,10 +2088,14 @@ public class MemberV3ApiServiceDelegatorErrorsTest extends DBUnitTest {
     }
 
     private void updateProfileSubmissionDate(String orcid, int increment) {
-        // Update the submission date so it is long enough
-        ProfileEntity profileEntity = profileDao.find(orcid);
-        profileEntity.setSubmissionDate(DateUtils.addDays(new Date(), increment));
-        profileDao.merge(profileEntity);
-        profileDao.flush();
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.execute(status -> {
+            // Update the submission date so it is long enough
+            ProfileEntity profileEntity = profileDao.find(orcid);
+            profileEntity.setSubmissionDate(DateUtils.addDays(new Date(), increment));
+            profileDao.merge(profileEntity);
+            profileDao.flush();
+            return null;
+        });
     }
 }

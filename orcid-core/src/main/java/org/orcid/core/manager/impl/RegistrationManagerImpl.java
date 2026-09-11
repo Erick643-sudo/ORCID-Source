@@ -1,13 +1,9 @@
 package org.orcid.core.manager.impl;
 
 import java.security.NoSuchAlgorithmException;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.orcid.core.common.manager.EmailFrequencyManager;
 import org.orcid.core.manager.AdminManager;
@@ -21,8 +17,7 @@ import org.orcid.core.manager.v3.AffiliationsManager;
 import org.orcid.core.manager.v3.EmailManager;
 import org.orcid.core.manager.v3.NotificationManager;
 import org.orcid.core.manager.v3.RecordNameManager;
-import org.orcid.core.security.OrcidWebRole;
-import org.orcid.core.togglz.Features;
+import org.orcid.core.security.OrcidRoles;
 import org.orcid.core.utils.VerifyRegistrationToken;
 import org.orcid.jaxb.model.common.AvailableLocales;
 import org.orcid.jaxb.model.common_v2.OrcidType;
@@ -47,10 +42,7 @@ import org.orcid.pojo.ajaxForm.Registration;
 import org.orcid.pojo.ajaxForm.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Required;
-import org.springframework.security.oauth2.common.exceptions.InvalidRequestException;
 import org.springframework.transaction.TransactionStatus;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -104,7 +96,6 @@ public class RegistrationManagerImpl implements RegistrationManager {
     @Resource
     private OrgDisambiguatedManager orgDisambiguatedManager;
     
-    @Required
     public void setEncryptionManager(EncryptionManager encryptionManager) {
         this.encryptionManager = encryptionManager;
     }   
@@ -123,7 +114,15 @@ public class RegistrationManagerImpl implements RegistrationManager {
         affiliationForm.setCity(Text.valueOf(orgDisambiguated.getCity()));
         affiliationForm.setCountry(Text.valueOf(orgDisambiguated.getCountry()));
         Affiliation affiliation = registration.getAffiliationForm().toAffiliation();
-        affiliationsManager.createEmploymentAffiliation(orcid, (Employment) affiliation, false);
+        Employment created = affiliationsManager.createEmploymentAffiliation(orcid, (Employment) affiliation, false, List.of());
+        // If and only if an affiliation is included and default visibility is PUBLIC, mark as featured
+        if (registration.getActivitiesVisibilityDefault() != null 
+                && registration.getActivitiesVisibilityDefault().getVisibility() != null
+                && org.orcid.jaxb.model.v3.release.common.Visibility.PUBLIC.equals(registration.getActivitiesVisibilityDefault().getVisibility())
+                && created != null
+                && created.getPutCode() != null) {
+            affiliationsManager.setOnlyFeatured(orcid, created.getPutCode());
+        }
     }
 
     @Override
@@ -159,7 +158,7 @@ public class RegistrationManagerImpl implements RegistrationManager {
                                 if(PojoUtil.isEmpty(duplicateAdditionalAddress)){
                                     duplicateAdditionalAddress = emailAddressAdditional;
                                 } else {
-                                    throw new InvalidRequestException("More than 2 duplicate emails");
+                                    throw new IllegalArgumentException("More than 2 duplicate emails");
                                 }
                             } 
                         }
@@ -193,7 +192,7 @@ public class RegistrationManagerImpl implements RegistrationManager {
                         emailManager.removeUnclaimedEmail(unclaimedOrcid01, emailAddress);
                         checkAutoDeprecateIsEnabledForEmail(duplicateAdditionalAddress);
                         String unclaimedOrcid02 = getOrcidIdFromEmail(duplicateAdditionalAddress);
-                        emailManager.removeUnclaimedEmail(unclaimedOrcid02, emailAddress);
+                        emailManager.removeUnclaimedEmail(unclaimedOrcid02, duplicateAdditionalAddress);
                         String newUserOrcid = createMinimalProfile(registration, usedCaptcha, locale, ip);
                         ProfileDeprecationRequest result01 = new ProfileDeprecationRequest();
                         adminManager.autoDeprecateProfile(result01, unclaimedOrcid01, newUserOrcid);
@@ -213,7 +212,7 @@ public class RegistrationManagerImpl implements RegistrationManager {
             });
             return orcidId;
         } catch (Exception e) {
-            throw new InvalidRequestException("Unable to register user due: " + e.getMessage(), e.getCause());
+            throw new IllegalArgumentException("Unable to register user due: " + e.getMessage(), e.getCause());
         }
     }
 
@@ -225,7 +224,6 @@ public class RegistrationManagerImpl implements RegistrationManager {
      * @return the new record
      * @throws NoSuchAlgorithmException 
      */
-    @Transactional
     private String createMinimalProfile(Registration registration, boolean usedCaptcha, Locale locale, String ip) {
         Date now = new Date();
         String orcid = orcidGenerationManager.createNewOrcid();
@@ -258,13 +256,12 @@ public class RegistrationManagerImpl implements RegistrationManager {
         // Set authority
         OrcidGrantedAuthority authority = new OrcidGrantedAuthority();
         authority.setOrcid(orcid);
-        authority.setAuthority(OrcidWebRole.ROLE_USER.getAuthority());
+        authority.setAuthority(OrcidRoles.ROLE_USER.getAuthority());
         Set<OrcidGrantedAuthority> authorities = new HashSet<OrcidGrantedAuthority>(1);
         authorities.add(authority);
         newRecord.setAuthorities(authorities);
 
         profileDao.persist(newRecord);
-        profileDao.flush();
         
         // Set primary email
         EmailEntity primaryEmailEntity = new EmailEntity();
@@ -329,7 +326,7 @@ public class RegistrationManagerImpl implements RegistrationManager {
      * @param emailAddress
      *            The email we want to check
      */
-    private void checkAutoDeprecateIsEnabledForEmail(String emailAddress) throws InvalidRequestException {
+    private void checkAutoDeprecateIsEnabledForEmail(String emailAddress) {
         // If the email doesn't exists, just return
         if (!emailManager.emailExists(emailAddress)) {
             return;
@@ -337,12 +334,12 @@ public class RegistrationManagerImpl implements RegistrationManager {
 
         // Check the record is not claimed
         if (profileEntityManager.isProfileClaimedByEmail(emailAddress)) {
-            throw new InvalidRequestException("Email " + emailAddress + " already exists and is claimed, so, it can't be used again");
+            throw new IllegalArgumentException("Email " + emailAddress + " already exists and is claimed, so, it can't be used again");
         }
 
         // Check the auto deprecate is enabled for this email address
         if (!emailManager.isAutoDeprecateEnableForEmail(emailAddress)) {
-            throw new InvalidRequestException("Autodeprecate is not enabled for " + emailAddress);
+            throw new IllegalArgumentException("Autodeprecate is not enabled for " + emailAddress);
         }
     }
 
@@ -356,7 +353,7 @@ public class RegistrationManagerImpl implements RegistrationManager {
         Map<String, String> emailMap = emailManager.findOricdIdsByCommaSeparatedEmails(emailAddress);
         String unclaimedOrcid = emailMap == null ? null : emailMap.get(emailAddress);
         if (PojoUtil.isEmpty(unclaimedOrcid)) {
-            throw new InvalidRequestException("Unable to find orcid id for " + emailAddress);
+            throw new IllegalArgumentException("Unable to find orcid id for " + emailAddress);
         }
         return unclaimedOrcid;
     }

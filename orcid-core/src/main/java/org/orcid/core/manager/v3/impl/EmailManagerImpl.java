@@ -2,14 +2,15 @@ package org.orcid.core.manager.v3.impl;
 
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.apache.commons.lang3.StringUtils;
-import org.orcid.core.manager.EncryptionManager;
 import org.orcid.core.manager.v3.EmailManager;
+import org.orcid.core.manager.v3.OrcidSecurityManager;
 import org.orcid.core.manager.v3.ProfileEmailDomainManager;
 import org.orcid.core.manager.v3.SourceManager;
 import org.orcid.core.manager.v3.read_only.impl.EmailManagerReadOnlyImpl;
@@ -25,6 +26,7 @@ import org.orcid.persistence.jpa.entities.SourceEntity;
 import org.orcid.pojo.ajaxForm.PojoUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -48,12 +50,11 @@ public class EmailManagerImpl extends EmailManagerReadOnlyImpl implements EmailM
 
     @Resource
     private ProfileDao profileDao;
-    
-    @Resource(name = "encryptionManager")
-    private EncryptionManager encryptionManager;
+
+    @Resource(name = "orcidSecurityManagerV3")
+    protected OrcidSecurityManager orcidSecurityManager;
     
     @Override
-    @Transactional
     public void removeEmail(String orcid, String email) {
         if (isPrimaryEmail(orcid, email)) {
             throw new IllegalArgumentException("Can't mark primary email as deleted");
@@ -88,13 +89,13 @@ public class EmailManagerImpl extends EmailManagerReadOnlyImpl implements EmailM
                 profileEmailDomainManager.processDomain(orcid, primaryEmail);
             }
             return result;
-        } catch (javax.persistence.NoResultException nre) {
+        } catch (jakarta.persistence.NoResultException nre) {
             String alternativePrimaryEmail = emailDao.findNewestVerifiedOrNewestEmail(orcid);
             emailDao.updatePrimary(orcid, alternativePrimaryEmail);
             String message = String.format("User with orcid %s have no primary email, so, we are setting the newest verified email, or, the newest email in case non is verified as the primary one", orcid);
             LOGGER.error(message);            
             throw nre;
-        } catch (javax.persistence.NonUniqueResultException nure) {
+        } catch (jakarta.persistence.NonUniqueResultException nure) {
             String alternativePrimaryEmail = emailDao.findNewestPrimaryEmail(orcid);
             emailDao.updatePrimary(orcid, alternativePrimaryEmail);            
             String message = String.format("User with orcid %s have more than one primary email, so, we are setting the latest modified primary as the primary one", orcid);
@@ -271,7 +272,6 @@ public class EmailManagerImpl extends EmailManagerReadOnlyImpl implements EmailM
             entity.setDateVerified(new Date());
         }
         emailDao.merge(entity);
-        emailDao.flush();
     }
 
     @Override
@@ -297,7 +297,6 @@ public class EmailManagerImpl extends EmailManagerReadOnlyImpl implements EmailM
                 entity.setVerified(false);
                 entity.setVisibility(visibility.name());
                 emailDao.merge(entity);  
-                emailDao.flush();
                 if(!entity.getVerified()) {
                     return true;
                 }
@@ -316,5 +315,47 @@ public class EmailManagerImpl extends EmailManagerReadOnlyImpl implements EmailM
             throw new IllegalArgumentException("Profile is claimed");
         }
         emailDao.removeEmail(orcid, emailAddress);
-    }      
+    }
+
+    @Override
+    public List<Email> removeEmails(String orcid, List<String> emailsToRemove) {
+        if (!orcidSecurityManager.isAdmin()) {
+            throw new AccessDeniedException("Admin privileges required to remove emails");
+        }
+
+        List<EmailEntity> currentEmails = emailDao.findByOrcid(orcid, System.currentTimeMillis());
+
+        if (emailsToRemove.size() >= currentEmails.size()) {
+            throw new IllegalArgumentException("Can't mark all user's as deleted");
+        }
+
+        List<EmailEntity> remainingEmails = transactionTemplate.execute(status -> {
+            emailsToRemove.forEach(email -> emailDao.removeEmail(orcid, email));
+            List<EmailEntity> remaining = emailDao.findByOrcid(orcid, System.currentTimeMillis());
+            ensurePrimaryEmail(orcid, remaining);
+            return remaining;
+        });
+
+        List<Email> result = toEmailList(remainingEmails);
+        org.orcid.jaxb.model.v3.release.record.Emails emails = new org.orcid.jaxb.model.v3.release.record.Emails();
+        emails.setEmails(result);
+        profileEmailDomainManager.updateEmailDomains(orcid, null, emails);
+
+        return result;
+    }
+
+    private void ensurePrimaryEmail(String orcid, List<EmailEntity> emails) {
+        boolean hasPrimaryEmail = emails.stream()
+                .anyMatch(email -> Boolean.TRUE.equals(email.getPrimary()));
+
+        if (!hasPrimaryEmail && !emails.isEmpty()) {
+            String newPrimaryEmail = emails.get(0).getEmail();
+            emailDao.updatePrimary(orcid, newPrimaryEmail);
+            emails.get(0).setPrimary(Boolean.TRUE);
+        }
+    }
+
+    private List<Email> toEmailList(List<EmailEntity> entities) {
+        return jpaJaxbEmailAdapter.toEmailList(entities);
+    }
 }

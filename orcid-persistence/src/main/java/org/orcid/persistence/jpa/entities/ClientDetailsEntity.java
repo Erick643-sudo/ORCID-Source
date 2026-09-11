@@ -12,29 +12,30 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.OneToMany;
-import javax.persistence.Table;
-import javax.persistence.Transient;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
-import org.hibernate.annotations.Sort;
-import org.hibernate.annotations.SortType;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.oauth2.provider.ClientDetails;
 import org.springframework.util.StringUtils;
+
+import org.hibernate.annotations.Fetch;
+import org.hibernate.annotations.FetchMode;
+import org.hibernate.annotations.SortNatural;
 
 /**
  * @author Declan Newman
  */
 @Entity
 @Table(name = "client_details")
-public class ClientDetailsEntity extends BaseEntity<String> implements ClientDetails, Serializable {
-    
+public class ClientDetailsEntity extends BaseEntity<String> implements Serializable {
+
     private static final long serialVersionUID = 1L;
 
     // Default is 20 years!
@@ -56,16 +57,18 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
     private String groupProfileId;
     private String authenticationProviderId;
 
-    private Set<CustomEmailEntity> customEmails = Collections.emptySet();
     private int accessTokenValiditySeconds = DEFAULT_TOKEN_VALIDITY;
     private boolean persistentTokensEnabled = false;
     private String emailAccessReason;
     private boolean allowAutoDeprecate = false;
     private boolean userOBOEnabled = false;
-    
+    private boolean userNotificationEnabled = false;
+    private String notificationWebpageUrl;
+    private String notificationDomains;
+
     private Date deactivatedDate;
     private String deactivatedBy;
-    
+
     public ClientDetailsEntity() {
     }
 
@@ -74,11 +77,11 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
     }
 
     public ClientDetailsEntity(String clientId, String clientName) {
-    	this.clientId = clientId;
-    	this.clientName = clientName;
-	}
+        this.clientId = clientId;
+        this.clientName = clientName;
+    }
 
-	/**
+    /**
      * This should be implemented by all entity classes to return the id of the
      * entity represented by the &lt;T&gt; generic argument
      * 
@@ -130,7 +133,8 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         this.clientWebsite = clientWebsite;
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
+    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientId", orphanRemoval = true)
+    @Fetch(FetchMode.SUBSELECT)
     public Set<ClientScopeEntity> getClientScopes() {
         return clientScopes;
     }
@@ -139,7 +143,8 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         this.clientScopes = clientScopes;
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
+    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientId", orphanRemoval = true)
+    @Fetch(FetchMode.SUBSELECT)
     public Set<ClientResourceIdEntity> getClientResourceIds() {
         return clientResourceIds;
     }
@@ -148,7 +153,8 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         this.clientResourceIds = clientResourceIds;
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
+    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientId", orphanRemoval = true)
+    @Fetch(FetchMode.SUBSELECT)
     public Set<ClientAuthorisedGrantTypeEntity> getClientAuthorizedGrantTypes() {
         return clientAuthorizedGrantTypes;
     }
@@ -157,8 +163,9 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         this.clientAuthorizedGrantTypes = clientAuthorizedGrantTypes;
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
-    @Sort(type = SortType.NATURAL)
+    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientId", orphanRemoval = true)
+    @Fetch(FetchMode.SUBSELECT)
+    @SortNatural
     public SortedSet<ClientRedirectUriEntity> getClientRegisteredRedirectUris() {
         return clientRegisteredRedirectUris;
     }
@@ -167,14 +174,15 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         this.clientRegisteredRedirectUris = clientRegisteredRedirectUris;
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
+    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientId", orphanRemoval = true)
+    @Fetch(FetchMode.SUBSELECT)
     public List<ClientGrantedAuthorityEntity> getClientGrantedAuthorities() {
         return clientGrantedAuthorities;
     }
 
     public void setClientGrantedAuthorities(List<ClientGrantedAuthorityEntity> clientGrantedAuthorities) {
         this.clientGrantedAuthorities = clientGrantedAuthorities;
-    }    
+    }
 
     @Column(name = "group_orcid")
     @JoinColumn(name = "group_orcid")
@@ -192,7 +200,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The client id.
      */
-    @Override
     @Transient
     public String getClientId() {
         return clientId;
@@ -203,7 +210,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The resources of this client.
      */
-    @Override
     @Transient
     public Set<String> getResourceIds() {
         Set<String> rids = new HashSet<String>();
@@ -220,7 +226,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return Whether a secret is required to authenticate this client.
      */
-    @Override
     @Transient
     public boolean isSecretRequired() {
         return StringUtils.hasText(clientSecret);
@@ -232,14 +237,14 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The client secret.
      */
-    @Override
     @Transient
     public String getClientSecret() {
         return getDecryptedClientSecret();
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
-    @Sort(type = SortType.NATURAL)
+    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientId", orphanRemoval = true)
+    @Fetch(FetchMode.SUBSELECT)
+    @SortNatural
     public Set<ClientSecretEntity> getClientSecrets() {
         return clientSecrets;
     }
@@ -248,15 +253,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         this.clientSecrets = clientSecrets;
     }
 
-    @OneToMany(cascade = { CascadeType.ALL }, fetch = FetchType.EAGER, mappedBy = "clientDetailsEntity", orphanRemoval = true)
-    public Set<CustomEmailEntity> getCustomEmails() {
-        return customEmails;
-    }
-
-    public void setCustomEmails(Set<CustomEmailEntity> customEmails) {
-        this.customEmails = customEmails;
-    }
-    
     @Column(name = "persistent_tokens_enabled")
     public boolean isPersistentTokensEnabled() {
         return persistentTokensEnabled;
@@ -265,7 +261,7 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
     public void setPersistentTokensEnabled(boolean persistentTokensEnabled) {
         this.persistentTokensEnabled = persistentTokensEnabled;
     }
-    
+
     /**
      * Reason, if any, client wants to access users' private email addresses.
      * 
@@ -292,14 +288,14 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         if (clientSecrets == null) {
             clientSecrets = new TreeSet<>();
         }
-        clientSecrets.add(new ClientSecretEntity(clientSecret, this));
+        clientSecrets.add(new ClientSecretEntity(clientSecret, this.getClientId()));
     }
 
     public void setClientSecretForJpa(String clientSecret, boolean primary) {
         if (clientSecrets == null) {
             clientSecrets = new TreeSet<>();
         }
-        clientSecrets.add(new ClientSecretEntity(clientSecret, this, primary));
+        clientSecrets.add(new ClientSecretEntity(clientSecret, this.getClientId(), primary));
     }
 
     @Transient
@@ -317,7 +313,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return Whether this client is limited to a specific scope.
      */
-    @Override
     @Transient
     public boolean isScoped() {
         return this.clientScopes != null && !this.clientScopes.isEmpty();
@@ -329,7 +324,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The scope of this client.
      */
-    @Override
     @Transient
     public Set<String> getScope() {
         Set<String> sps = new HashSet<String>();
@@ -346,7 +340,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The grant types for which this client is authorized.
      */
-    @Override
     @Transient
     public Set<String> getAuthorizedGrantTypes() {
         Set<String> grants = new HashSet<String>();
@@ -364,7 +357,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The pre-defined redirect URI for this client.
      */
-    @Override
     @Transient
     public Set<String> getRegisteredRedirectUri() {
         Set<String> redirects = null;
@@ -385,7 +377,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return The authorities.
      */
-    @Override
     @Transient
     public Collection<GrantedAuthority> getAuthorities() {
         Collection<GrantedAuthority> gas = new ArrayList<GrantedAuthority>();
@@ -401,31 +392,11 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
      * 
      * @return the access token validity period
      */
-    @Override
     @Transient
     public Integer getAccessTokenValiditySeconds() {
         return accessTokenValiditySeconds;
     }
 
-    @Override
-    @Transient
-    public Integer getRefreshTokenValiditySeconds() {
-        // Not currently required
-        return null;
-    }
-
-    @Override
-    @Transient
-    public Map<String, Object> getAdditionalInformation() {
-        // Not currently required
-        return null;
-    }
-
-    @Override
-    @Transient
-    public boolean isAutoApprove(String scope) {        
-        return false;
-    }
 
     @Column(name = "authentication_provider_id")
     public String getAuthenticationProviderId() {
@@ -444,7 +415,7 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
     public void setAllowAutoDeprecate(boolean allowAutoDeprecate) {
         this.allowAutoDeprecate = allowAutoDeprecate;
     }
-    
+
     @Column(name = "user_obo_enabled")
     public boolean isUserOBOEnabled() {
         return userOBOEnabled;
@@ -453,7 +424,7 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
     public void setUserOBOEnabled(boolean userOBOEnabled) {
         this.userOBOEnabled = userOBOEnabled;
     }
-    
+
     @Column(name = "deactivated_date")
     public Date getDeactivatedDate() {
         return deactivatedDate;
@@ -500,7 +471,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
         result = prime * result + ((clientSecrets == null) ? 0 : clientSecrets.hashCode());
         result = prime * result + ((clientType == null) ? 0 : clientType.hashCode());
         result = prime * result + ((clientWebsite == null) ? 0 : clientWebsite.hashCode());
-        result = prime * result + ((customEmails == null) ? 0 : customEmails.hashCode());
         result = prime * result + ((decryptedClientSecret == null) ? 0 : decryptedClientSecret.hashCode());
         result = prime * result + ((emailAccessReason == null) ? 0 : emailAccessReason.hashCode());
         result = prime * result + ((groupProfileId == null) ? 0 : groupProfileId.hashCode());
@@ -584,11 +554,6 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
                 return false;
         } else if (!clientWebsite.equals(other.clientWebsite))
             return false;
-        if (customEmails == null) {
-            if (other.customEmails != null)
-                return false;
-        } else if (!customEmails.equals(other.customEmails))
-            return false;
         if (decryptedClientSecret == null) {
             if (other.decryptedClientSecret != null)
                 return false;
@@ -606,8 +571,35 @@ public class ClientDetailsEntity extends BaseEntity<String> implements ClientDet
             return false;
         if (persistentTokensEnabled != other.persistentTokensEnabled)
             return false;
-        if (userOBOEnabled != other.userOBOEnabled) 
+        if (userOBOEnabled != other.userOBOEnabled)
             return false;
         return true;
-    }                  
+    }
+
+    @Column(name = "user_notification_enabled")
+    public boolean isUserNotificationEnabled() {
+        return userNotificationEnabled;
+    }
+
+    public void setUserNotificationEnabled(boolean userNotificationEnabled) {
+        this.userNotificationEnabled = userNotificationEnabled;
+    }
+
+    @Column(name = "notification_webpage_url")
+    public String getNotificationWebpageUrl() {
+        return notificationWebpageUrl;
+    }
+
+    public void setNotificationWebpageUrl(String notificationWebpageUrl) {
+        this.notificationWebpageUrl = notificationWebpageUrl;
+    }
+
+    @Column(name = "notification_domains")
+    public String getNotificationDomains() {
+        return notificationDomains;
+    }
+
+    public void setNotificationDomains(String notificationDomains) {
+        this.notificationDomains = notificationDomains;
+    }
 }

@@ -18,6 +18,8 @@ import org.orcid.jaxb.model.common.Relationship;
 import org.orcid.jaxb.model.v3.release.record.Work;
 import org.orcid.jaxb.model.v3.release.record.summary.WorkSummary;
 import org.orcid.persistence.jpa.entities.ProfileEntity;
+import org.orcid.pojo.ActivityTitle;
+import org.orcid.pojo.ActivityTitleSearchResult;
 import org.orcid.pojo.GroupedWorks;
 import org.orcid.pojo.IdentifierType;
 import org.orcid.pojo.PIDResolutionResult;
@@ -31,11 +33,13 @@ import org.orcid.pojo.grouping.WorkGroupingSuggestionsCount;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -92,7 +96,12 @@ public class WorksController extends BaseWorkspaceController {
 
     @Value("${org.orcid.core.work.contributors.ui.max:50}")
     private int maxContributorsForUI;
+    
+    @Value("${org.orcid.core.work.search.title.toFeature.size:10}")
+    private int resultsSizeForSearchWorksToFeature;
 
+    private static final int ACTIVITY_TITLE_SEARCH_MAX_LENGHT = 100;
+    
     @RequestMapping(value = "/{workIdsStr}", method = RequestMethod.DELETE)
     public @ResponseBody ArrayList<Long> removeWork(@PathVariable("workIdsStr") String workIdsStr) {
         List<String> workIds = Arrays.asList(workIdsStr.split(","));
@@ -283,7 +292,7 @@ public class WorksController extends BaseWorkspaceController {
             return null;
 
         WorkExtended work = workManager.getWorkExtended(this.getEffectiveUserOrcid(), workId);
-        WorkForm workForm = WorkForm.valueOf(work, maxContributorsForUI);
+        WorkForm workForm = WorkForm.getExtendedWorkForm(work, maxContributorsForUI);
         
         if (workForm != null) {
             if (workForm.getPublicationDate() == null) {
@@ -365,10 +374,6 @@ public class WorksController extends BaseWorkspaceController {
                 String languageName = languages.get(workForm.getTranslatedTitle().getLanguageCode());
                 workForm.getTranslatedTitle().setLanguageName(languageName);
             }
-
-            if (workForm.getContributorsGroupedByOrcid() != null) {
-                contributorUtils.filterContributorsGroupedByOrcidPrivateData(workForm.getContributorsGroupedByOrcid(), maxContributorsForUI);
-            }            
 
             return workForm;
         }
@@ -853,6 +858,39 @@ public class WorksController extends BaseWorkspaceController {
         return worksPaginator.getWorksExtendedPage(orcid, offset, pageSize, false, sort, sortAsc);
     }
 
+    @RequestMapping(value = "/featuredWorks.json", method = RequestMethod.GET)
+    public @ResponseBody List<WorkForm> getFeaturedWorksJson() {
+        String orcid = getEffectiveUserOrcid();
+        return workManagerReadOnly.getFeaturedWorks(orcid);
+    }
+    
+    @RequestMapping(value = "/searchWorksTitleToFeature.json", method = RequestMethod.GET)
+    public @ResponseBody ActivityTitleSearchResult searchWorkTitlesToFeatureJson(@RequestParam(value="term") String term, @RequestParam(value="offset", defaultValue = "0") int offset) {
+        String orcid = getEffectiveUserOrcid();
+        if (term == null || term.isBlank()|| term.trim().length() >= ACTIVITY_TITLE_SEARCH_MAX_LENGHT) {
+            ActivityTitleSearchResult emptyResult = new ActivityTitleSearchResult (new ArrayList<>(), offset,0);
+            setErrorCode(emptyResult, "error.activity_title_search.term_length_invalid");
+            return emptyResult;
+        }
+        return workManagerReadOnly.searchWorksTitle(orcid, term,resultsSizeForSearchWorksToFeature,offset, true, true);
+    }
+
+
+    @RequestMapping(value = "/featuredWorks.json", method = RequestMethod.PUT)
+    public @ResponseBody ResponseEntity<Map<String, Object>> getFeaturedWorksJson(HttpServletRequest request, @RequestBody Map<Long, Integer> featuredWorks) {
+        String orcid = getEffectiveUserOrcid();
+        Map<String, Object> body = new HashMap<String, Object>();
+        try {
+            boolean updated = workManager.updateFeaturedWorks(orcid, featuredWorks);
+            body.put("ok", Boolean.valueOf(updated));
+            return new ResponseEntity<Map<String, Object>>(body, HttpStatus.OK);
+        } catch (IllegalStateException ex) {
+            body.put("error", "non_public_works_selected");
+            body.put("message", ex.getMessage());
+            return new ResponseEntity<Map<String, Object>>(body, HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+    }
+
     @RequestMapping(value = "/allWorks.json", method = RequestMethod.GET)
     public @ResponseBody Page<WorkGroup> getAllWorkGroupsJson(@RequestParam("sort") String sort, @RequestParam("sortAsc") boolean sortAsc) {
         String orcid = getEffectiveUserOrcid();
@@ -869,7 +907,7 @@ public class WorksController extends BaseWorkspaceController {
     /**
      * updates visibility of works
      */
-    @RequestMapping(value = "/{workIdsStr}/visibility/{visibilityStr}", method = RequestMethod.GET)
+    @RequestMapping(value = "/{workIdsStr}/visibility/{visibilityStr}", method = RequestMethod.POST)
     public @ResponseBody ArrayList<Long> updateVisibility(@PathVariable("workIdsStr") String workIdsStr, @PathVariable("visibilityStr") String visibilityStr) {
         // make sure this is a users work
         String orcid = getEffectiveUserOrcid();

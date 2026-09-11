@@ -4,17 +4,22 @@ import java.math.BigInteger;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.concurrent.ForkJoinPool;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 
-import org.orcid.core.adapter.jsonidentifier.converter.JSONWorkExternalIdentifiersConverterV3;
+import org.apache.commons.lang3.StringUtils;
+import org.orcid.core.adapter.mapstruct.ContributorsRolesAndSequencesMapperV3;
+import org.orcid.core.adapter.mapstruct.JSONWorkExternalIdentifiersMapperV3;
+import org.orcid.core.adapter.mapstruct.WorkContributorsMapperV3;
 import org.orcid.core.adapter.v3.JpaJaxbWorkAdapter;
-import org.orcid.core.adapter.v3.converter.ContributorsRolesAndSequencesConverter;
-import org.orcid.core.adapter.v3.converter.WorkContributorsConverter;
-import org.orcid.core.contributors.roles.works.WorkContributorRoleConverter;
 import org.orcid.core.exception.ExceedMaxNumberOfPutCodesException;
 import org.orcid.core.exception.OrcidCoreExceptionMapper;
 import org.orcid.core.exception.PutCodeFormatException;
@@ -22,40 +27,39 @@ import org.orcid.core.manager.ClientDetailsEntityCacheManager;
 import org.orcid.core.manager.SourceNameCacheManager;
 import org.orcid.core.manager.WorkEntityCacheManager;
 import org.orcid.core.manager.v3.GroupingSuggestionManager;
-import org.orcid.core.manager.v3.read_only.ClientDetailsManagerReadOnly;
+import org.orcid.core.manager.v3.WorksExtendedCacheManager;
 import org.orcid.core.manager.v3.read_only.WorkManagerReadOnly;
 import org.orcid.core.togglz.Features;
+import org.orcid.core.utils.SourceEntityUtils;
 import org.orcid.core.utils.v3.ContributorUtils;
-import org.orcid.core.utils.v3.activities.ActivitiesGroup;
-import org.orcid.core.utils.v3.activities.ActivitiesGroupGenerator;
-import org.orcid.core.utils.v3.activities.WorkComparators;
-import org.orcid.core.utils.v3.activities.WorkGroupAndGroupingSuggestionGenerator;
+import org.orcid.core.utils.v3.activities.*;
 import org.orcid.jaxb.model.record.bulk.BulkElement;
-import org.orcid.jaxb.model.v3.release.record.ExternalID;
-import org.orcid.jaxb.model.v3.release.record.ExternalIDs;
-import org.orcid.jaxb.model.v3.release.record.GroupAble;
-import org.orcid.jaxb.model.v3.release.record.GroupableActivity;
-import org.orcid.jaxb.model.v3.release.record.Work;
-import org.orcid.jaxb.model.v3.release.record.WorkBulk;
+import org.orcid.jaxb.model.v3.release.common.PublicationDate;
+import org.orcid.jaxb.model.v3.release.common.Source;
+import org.orcid.jaxb.model.v3.release.record.*;
 import org.orcid.jaxb.model.v3.release.record.summary.WorkGroup;
 import org.orcid.jaxb.model.v3.release.record.summary.WorkSummary;
 import org.orcid.jaxb.model.v3.release.record.summary.Works;
 import org.orcid.persistence.dao.WorkDao;
+import org.orcid.persistence.jpa.entities.ClientDetailsEntity;
 import org.orcid.persistence.jpa.entities.MinimizedWorkEntity;
 import org.orcid.persistence.jpa.entities.WorkEntity;
 import org.orcid.persistence.jpa.entities.WorkLastModifiedEntity;
-import org.orcid.pojo.ContributorsRolesAndSequences;
-import org.orcid.pojo.WorkContributorsList;
-import org.orcid.pojo.WorkExtended;
-import org.orcid.pojo.WorkGroupExtended;
-import org.orcid.pojo.WorkSummaryExtended;
-import org.orcid.pojo.WorksExtended;
+import org.orcid.pojo.*;
 import org.orcid.pojo.ajaxForm.PojoUtil;
+import org.orcid.pojo.ajaxForm.WorkForm;
 import org.orcid.pojo.grouping.WorkGroupingSuggestion;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
+import static org.orcid.pojo.ajaxForm.PojoUtil.getWorkForm;
+
 public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements WorkManagerReadOnly {
-    
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(WorkManagerReadOnlyImpl.class);
+
     public static final String BULK_PUT_CODES_DELIMITER = ",";
 
     @Resource(name = "jpaJaxbWorkAdapterV3")
@@ -69,41 +73,41 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
     protected WorkEntityCacheManager workEntityCacheManager;
 
     private final Integer maxWorksToRead;
-    
+
     @Resource
+    private WorksExtendedCacheManager worksExtendedCacheManager;
+
+    @Resource(name = "groupingSuggestionManagerV3")
     private GroupingSuggestionManager groupingSuggestionsManager;
 
     @Resource(name = "contributorUtilsV3")
     private ContributorUtils contributorUtils;
 
-    @Resource
-    private WorkContributorRoleConverter workContributorsRoleConverter;
+    @Resource(name = "workContributorsMapperV3")
+    private WorkContributorsMapperV3 workContributorsMapperV3;
 
-    @Resource(name = "workContributorsConverter")
-    private WorkContributorsConverter workContributorsConverter;
-        
-    @Resource
-    private JSONWorkExternalIdentifiersConverterV3 jsonWorkExternalIdentifiersConverterV3;
+    @Autowired
+    private JSONWorkExternalIdentifiersMapperV3 jsonWorkExternalIdentifiersConverterV3;
 
-    @Resource(name = "clientDetailsManagerReadOnlyV3")
-    private ClientDetailsManagerReadOnly clientDetailsManagerReadOnly;
-    
     @Resource
     protected ClientDetailsEntityCacheManager clientDetailsEntityCacheManager;
 
     @Resource
     private SourceNameCacheManager sourceNameCacheManager;
 
+    @Resource(name = "contributorsRolesAndSequencesConverter")
+    private ContributorsRolesAndSequencesMapperV3 contributorsRolesAndSequencesConverter;
+
     @Resource
-    private ContributorsRolesAndSequencesConverter contributorsRolesAndSequencesConverter;
+    private SourceEntityUtils sourceEntityUtils;
 
     @Value("${org.orcid.core.work.contributors.ui.max:50}")
     private int maxContributorsForUI;
-    
+
     public WorkManagerReadOnlyImpl(@Value("${org.orcid.core.works.bulk.read.max:100}") Integer bulkReadSize) {
         this.maxWorksToRead = (bulkReadSize == null) ? 100 : bulkReadSize;
     }
-    
+
     public void setWorkDao(WorkDao workDao) {
         this.workDao = workDao;
     }
@@ -128,19 +132,17 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
      * Checks if there is any public work for a specific user
      * 
      * @param orcid
-     *          the Id of the user
+     *            the Id of the user
      * @return true if there is at least one public work for a specific user
-     * */
+     */
     @Override
     public Boolean hasPublicWorks(String orcid) {
-        if(PojoUtil.isEmpty(orcid)) {
+        if (PojoUtil.isEmpty(orcid)) {
             return false;
         }
         return workDao.hasPublicWorks(orcid);
     }
-    
-    
-    
+
     /**
      * Find the public works for a specific user
      * 
@@ -184,37 +186,58 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
     @Override
     public List<WorkSummary> getWorksSummaryList(String orcid) {
         List<MinimizedWorkEntity> works = workEntityCacheManager.retrieveMinimizedWorks(orcid, getLastModified(orcid));
-        return jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(works);
+        Set<String> clientIds = works.stream()
+                .map(MinimizedWorkEntity::getClientSourceId)
+                .filter(clientId -> !PojoUtil.isEmpty(clientId))
+                .collect(Collectors.toSet());
+
+        // Get the client details from the database
+        Map<String, ClientDetailsEntity> clientDetailsById = clientDetailsEntityCacheManager.retrieveAll(clientIds);
+        Map<String, Source> sources = new HashMap<>();
+        works.stream().forEach(workEntity -> {
+            String sourceKey = SourceEntityUtils.getSourceKey(workEntity);
+            if(!sources.containsKey(sourceKey)) {
+                Source source = sourceEntityUtils.extractSourceFromEntityComplete(workEntity, clientDetailsById);
+                sources.put(sourceKey, source);
+            }
+        });
+        if (clientIds.isEmpty()) {
+            return jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(works);
+        }
+
+        // This map should be read-only
+        return jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(works, Collections.unmodifiableMap(sources));
     }
 
     /**
      * Get the list of works that belongs to a user
      *
      * @param orcid
+     * @param featuredOnly
      * @return the list of works that belongs to this user
      */
     @Override
-    public List<WorkSummaryExtended> getWorksSummaryExtendedList(String orcid) {
-        List<WorkSummaryExtended> wseList = retrieveWorkSummaryExtended(orcid);
+    public List<WorkSummaryExtended> getWorksSummaryExtendedList(String orcid, boolean featuredOnly) {
+        List<WorkSummaryExtended> wseList = retrieveWorkSummaryExtended(orcid, featuredOnly);
         // Filter the contributors list
         for (WorkSummaryExtended wse : wseList) {
             if (wse.getContributorsGroupedByOrcid() != null && wse.getContributorsGroupedByOrcid().size() > 0) {
-                contributorUtils.filterContributorsGroupedByOrcidPrivateData(wse.getContributorsGroupedByOrcid(), maxContributorsForUI);
                 wse.setNumberOfContributors(wse.getContributorsGroupedByOrcid().size());
             } else {
-                contributorUtils.filterContributorPrivateData(wse.getContributors().getContributor(), maxContributorsForUI);
-                List<ContributorsRolesAndSequences> contributorsGroupedByOrcid = contributorUtils.getContributorsGroupedByOrcid(wse.getContributors().getContributor(), maxContributorsForUI);
+                List<ContributorsRolesAndSequences> contributorsGroupedByOrcid = contributorUtils.getContributorsGroupedByOrcid(wse.getContributors().getContributor(),
+                        maxContributorsForUI);
                 wse.setContributorsGroupedByOrcid(contributorsGroupedByOrcid);
                 wse.setNumberOfContributors(contributorsGroupedByOrcid.size());
             }
-        }        
+        }
         return wseList;
     }
 
-    private List<WorkSummaryExtended> retrieveWorkSummaryExtended(String orcid) {
+    private List<WorkSummaryExtended> retrieveWorkSummaryExtended(String orcid, boolean featuredOnly) {
         List<WorkSummaryExtended> workSummaryExtendedList = new ArrayList<>();
-        List<Object[]> list = workDao.getWorksByOrcid(orcid);
-        for(Object[] q1 : list){
+        Map<String, Boolean> isUserOBOEnabled = new HashMap<String, Boolean>();
+        List<Object[]> list = workDao.getWorksByOrcid(orcid, featuredOnly);
+        for (Object[] q1 : list) {
             BigInteger putCode = (BigInteger) q1[0];
             String workType = isEmpty(q1[1]);
             String title = isEmpty(q1[2]);
@@ -232,51 +255,56 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
             Timestamp createdDate = (Timestamp) q1[14];
             Timestamp lastModifiedDate = (Timestamp) q1[15];
             String contributors = isEmpty(q1[16]);
+            int featuredDisplayIndex = (int) q1[17];
             ExternalIDs externalIDs = null;
             if (externalIdsJson != null) {
-                externalIDs = jsonWorkExternalIdentifiersConverterV3.convertFrom(externalIdsJson,null);
+                externalIDs = jsonWorkExternalIdentifiersConverterV3.convertFrom(externalIdsJson);
             }
             String sourceName = null;
             String assertionOriginName = null;
-            if (clientSourceId != null) {
-                assertionOriginSourceId = contributorUtils.getAssertionOriginOrcid(clientSourceId, orcid, putCode.longValue(), clientDetailsEntityCacheManager, workDao);
+            if (StringUtils.isNotBlank(clientSourceId)) {
+                //Set the source name
+                sourceName = sourceNameCacheManager.retrieve(clientSourceId);
+                // Check if user OBO is enabled
+                if(!isUserOBOEnabled.containsKey(clientSourceId)) {
+                    ClientDetailsEntity clientEntity = clientDetailsEntityCacheManager.retrieve(clientSourceId);
+                    if(clientEntity != null && clientEntity.isUserOBOEnabled()) {
+                        isUserOBOEnabled.put(clientSourceId, true);
+                    } else {
+                        isUserOBOEnabled.put(clientSourceId, false);
+                    }
+                }
+                if(isUserOBOEnabled.get(clientSourceId)) {
+                    // On user OBO the assertion origin name is the same as the orcid id
+                    assertionOriginSourceId = orcid;
+                    assertionOriginName = sourceNameCacheManager.retrieve(orcid);
+                }
             }
-            if (!PojoUtil.isEmpty(assertionOriginSourceId)) {
-                assertionOriginName = contributorUtils.getSourceName(assertionOriginSourceId, sourceNameCacheManager);
+
+            // Check the sourceId name only if there is no clientSourceId
+            if (PojoUtil.isEmpty(sourceName) && !PojoUtil.isEmpty(sourceId)) {
+                sourceName = sourceNameCacheManager.retrieve(sourceId);
             }
+
             if (!PojoUtil.isEmpty(assertionOriginClientSourceId)) {
-                assertionOriginName = contributorUtils.getSourceName(assertionOriginClientSourceId, sourceNameCacheManager);
+                assertionOriginName = sourceNameCacheManager.retrieve(assertionOriginClientSourceId);
             }
-            if (!PojoUtil.isEmpty(sourceId)){
-                sourceName = contributorUtils.getSourceName(sourceId, sourceNameCacheManager);
-            }
-            if (!PojoUtil.isEmpty(clientSourceId)) {
-                sourceName = contributorUtils.getSourceName(clientSourceId, sourceNameCacheManager);
-            }
+
             List<WorkContributorsList> contributorList = new ArrayList<>();
             List<ContributorsRolesAndSequences> contributorsRolesAndSequencesList = new ArrayList<>();
 
             if (contributors != null && !"".equals(contributors)) {
                 contributorsRolesAndSequencesList = contributorsRolesAndSequencesConverter.getContributorsRolesAndSequencesList(contributors);
             } else {
-                contributorList = workContributorsConverter.getContributorsList(contributors);
+                contributorList = workContributorsMapperV3.getContributorsList(contributors);
             }
 
-            WorkSummaryExtended wse = new WorkSummaryExtended.WorkSummaryExtendedBuilder(putCode, workType, title, sourceId, clientSourceId, createdDate, lastModifiedDate)
-                    .journalTitle(journalTitle)
-                    .externalIdsJson(externalIDs)
-                    .publicationYear(publicationYear)
-                    .publicationMonth(publicationMonth)
-                    .publicationDay(publicationDay)
-                    .visibility(visibility)
-                    .sourceName(sourceName)
-                    .assertionOriginName(assertionOriginName)
-                    .displayIndex(displayIndex)
-                    .assertionOriginSourceId(assertionOriginSourceId)
-                    .assertionOriginClientSourceId(assertionOriginClientSourceId)
-                    .contributors(contributorList)
-                    .topContributors(contributorsRolesAndSequencesList)
-                    .build();
+            WorkSummaryExtended wse = new WorkSummaryExtended.WorkSummaryExtendedBuilder(putCode, workType, title, sourceId, clientSourceId, createdDate,
+                    lastModifiedDate).journalTitle(journalTitle).externalIdsJson(externalIDs).publicationYear(publicationYear).publicationMonth(publicationMonth)
+                            .publicationDay(publicationDay).visibility(visibility).sourceName(sourceName).assertionOriginName(assertionOriginName)
+                            .displayIndex(displayIndex).featuredDisplayIndex(featuredDisplayIndex).assertionOriginSourceId(assertionOriginSourceId)
+                            .assertionOriginClientSourceId(assertionOriginClientSourceId).contributors(contributorList).topContributors(contributorsRolesAndSequencesList)
+                            .build();
             workSummaryExtendedList.add(wse);
         }
         return workSummaryExtendedList;
@@ -295,9 +323,10 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
         List<MinimizedWorkEntity> works = workEntityCacheManager.retrieveMinimizedWorks(orcid, putCodes, getLastModified(orcid));
         return jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(works);
     }
-    
+
     /**
-     * Generate a grouped list of works with the given list of works and generates grouping suggestions
+     * Generate a grouped list of works with the given list of works and
+     * generates grouping suggestions
      * 
      * @param works
      *            The list of works to group
@@ -353,31 +382,31 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
 
     @Override
     public WorkBulk findWorkBulk(String orcid, String putCodesAsString) {
-        List<BulkElement> works = new ArrayList<>();        
-        List<Long> putCodes = Arrays.stream(getPutCodeArray(putCodesAsString)).map(s -> Long.parseLong(s)).collect(Collectors.toList());                        
+        List<BulkElement> works = new ArrayList<>();
+        List<Long> putCodes = Arrays.stream(getPutCodeArray(putCodesAsString)).map(s -> Long.parseLong(s)).collect(Collectors.toList());
         List<WorkEntity> entities = new ArrayList<>();
-        
+
         if (Features.READ_BULK_WORKS_DIRECTLY_FROM_DB.isActive()) {
-            entities = workDao.getWorkEntities(orcid, putCodes);            
+            entities = workDao.getWorkEntities(orcid, putCodes);
         } else {
             entities = workEntityCacheManager.retrieveFullWorks(orcid, putCodes);
         }
-        
-        for(WorkEntity entity : entities) {
+
+        for (WorkEntity entity : entities) {
             works.add(jpaJaxbWorkAdapter.toWork(entity));
             putCodes.remove(entity.getId());
         }
-        
+
         // Put codes still in this list doesn't exists on the database
-        for(Long invalidPutCode : putCodes) {
+        for (Long invalidPutCode : putCodes) {
             works.add(orcidCoreExceptionMapper.getV3OrcidError(new PutCodeFormatException("'" + invalidPutCode + "' is not a valid put code")));
         }
-        
+
         WorkBulk bulk = new WorkBulk();
         bulk.setBulk(works);
         return bulk;
     }
-    
+
     @Override
     public Works getWorksAsGroups(String orcid) {
         return groupWorksAndGenerateGroupingSuggestions(getWorksSummaryList(orcid), orcid);
@@ -385,7 +414,28 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
 
     @Override
     public WorksExtended getWorksExtendedAsGroups(String orcid) {
-        return groupWorksExtendedAndGenerateGroupingSuggestions(getWorksSummaryExtendedList(orcid), orcid);
+        return groupWorksExtendedAndGenerateGroupingSuggestions(getWorksSummaryExtendedList(orcid, false), orcid);
+    }
+
+    @Override
+    public List<WorkSummaryExtended> getFeaturedWorksSummaryExtended(String orcid) {
+        List<WorkSummaryExtended> featured = getWorksSummaryExtendedList(orcid, true);
+        if (featured != null && !featured.isEmpty()) {
+            featured.sort((a, b) -> Integer.compare(a.getFeaturedDisplayIndex(), b.getFeaturedDisplayIndex()));
+        }
+        return featured;
+    }
+
+    @Override
+    public List<WorkForm> getFeaturedWorks(String orcid) {
+        List<WorkSummaryExtended> works = worksExtendedCacheManager.getFeaturedGroupedWorksExtended(orcid);
+        List<WorkForm> workForms = new ArrayList<>();
+        if (!works.isEmpty()) {
+            for (WorkSummaryExtended workSummary : works) {
+                workForms.add(getWorkForm(workSummary));
+            }
+        }
+        return workForms;
     }
 
     private String[] getPutCodeArray(String putCodesAsString) {
@@ -399,7 +449,7 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
     @Override
     public List<Work> findWorks(String orcid, List<WorkLastModifiedEntity> elements) {
         List<Work> result = new ArrayList<Work>();
-        for(WorkLastModifiedEntity w : elements) {
+        for (WorkLastModifiedEntity w : elements) {
             WorkEntity entity = workEntityCacheManager.retrieveFullWork(orcid, w.getId(), w.getLastModified().getTime());
             result.add(jpaJaxbWorkAdapter.toWork(entity));
         }
@@ -416,16 +466,100 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
     public ExternalIDs getAllExternalIDs(String orcid) {
         List<WorkSummary> summaries = getWorksSummaryList(orcid);
         ExternalIDs ids = new ExternalIDs();
-        for (WorkSummary s:summaries){
-            for (ExternalID id: s.getExternalIdentifiers().getExternalIdentifier()){
-                if (!ids.getExternalIdentifier().contains(id)){
+        for (WorkSummary s : summaries) {
+            for (ExternalID id : s.getExternalIdentifiers().getExternalIdentifier()) {
+                if (!ids.getExternalIdentifier().contains(id)) {
                     ids.getExternalIdentifier().add(id);
                 }
             }
         }
         return ids;
     }
-    
+
+    public List<ActivityTitle> getWorksTitle(String orcid) {
+        WorksExtended worksExtended = worksExtendedCacheManager.getGroupedWorksExtended(orcid);
+        List<ActivityTitle> titles = new ArrayList<>();
+        if (worksExtended != null && worksExtended.getWorkGroup() != null && !worksExtended.getWorkGroup().isEmpty()) {
+            for (WorkGroupExtended wg : worksExtended.getWorkGroup()) {
+                List<WorkSummaryExtended> orderedList = new ArrayList<>(wg.getWorkSummary());
+                orderedList.sort((a, b) -> Long.compare(Long.valueOf(b.getDisplayIndex()), Long.valueOf(a.getDisplayIndex())));
+                for (int i = 0; i < orderedList.size(); i++) {
+                    WorkSummaryExtended w = orderedList.get(i);
+                    ActivityTitle title = new ActivityTitle();
+                    title.setPutCode(w.getPutCode());
+                    // If this is the first element, it is the one with the
+                    // highest display index
+                    title.setDefault(i == 0);
+                    if (w.getTitle() != null && w.getTitle().getTitle() != null && !PojoUtil.isEmpty(w.getTitle().getTitle().getContent())) {
+                        title.setTitle(w.getTitle().getTitle().getContent());
+                    } else {
+                        title.setTitle("");
+                    }
+
+                    title.setPublic(org.orcid.jaxb.model.v3.release.common.Visibility.PUBLIC.equals(w.getVisibility()));
+
+                    title.setFeaturedDisplayIndex(w.getFeaturedDisplayIndex());
+                    if (w.getPublicationDate() != null) {
+                        PublicationDate pd = w.getPublicationDate();
+                        if (pd.getYear() != null && !PojoUtil.isEmpty(pd.getYear().getValue())) {
+                            title.setPublicationYear(pd.getYear().getValue());
+                        }
+                        if (pd.getMonth() != null && !PojoUtil.isEmpty(pd.getMonth().getValue())) {
+                            title.setPublicationMonth(pd.getMonth().getValue());
+                        }
+                        if (pd.getDay() != null && !PojoUtil.isEmpty(pd.getDay().getValue())) {
+                            title.setPublicationDay(pd.getDay().getValue());
+                        }
+                    }
+                    if (w.getType()!= null && !PojoUtil.isEmpty(w.getType().value())) {
+                        title.setWorkType(w.getType().value()); 
+                    }
+                    if (w.getJournalTitle() != null && !PojoUtil.isEmpty(w.getJournalTitle().getContent())) {
+                        title.setJournalTitle(w.getJournalTitle().getContent());
+                    }
+                    titles.add(title);
+                }
+            }
+        }
+
+        return titles;
+    }
+
+    @Override
+    public ActivityTitleSearchResult searchWorksTitle(String orcid, String searchTerm, int size, int offset, boolean publicOnly, boolean defaultOnly) {
+
+        ActivityTitleSearchResult result = new ActivityTitleSearchResult(new ArrayList<>(), 0, 0);
+        if (PojoUtil.isEmpty(searchTerm)) {
+            return new ActivityTitleSearchResult (new ArrayList<>(), 0,0);
+        }
+
+        List<ActivityTitle> allTitles = getWorksTitle(orcid); 
+        String lowerCaseSearchTerm = searchTerm.toLowerCase();
+        List<ActivityTitle> filteredTitles = allTitles.stream().filter(t -> t.getTitle() != null && t.getTitle().toLowerCase().contains(lowerCaseSearchTerm))
+                .collect(Collectors.toList());
+        if (publicOnly) {
+            filteredTitles = filteredTitles.stream().filter(t -> t.isPublic()).collect(Collectors.toList());
+        }
+        
+        if (defaultOnly) {
+            filteredTitles = filteredTitles.stream().filter(t -> t.isDefault()).collect(Collectors.toList());
+        }
+        
+        int totalCount = filteredTitles.size();
+        
+        if (filteredTitles.size() > size) {
+            int fromIndex = Math.min(offset, filteredTitles.size());
+            int toIndex = Math.min(fromIndex + size, filteredTitles.size());
+            filteredTitles = filteredTitles.subList(fromIndex, toIndex);
+        }
+        result.setResults(filteredTitles);
+        result.setTotalCount(totalCount);
+        result.setOffset(offset);
+        result.setPageSize(size);
+        
+        return result;
+    }
+
     private Works processGroupedWorks(List<ActivitiesGroup> groups) {
         Works result = new Works();
         for (ActivitiesGroup group : groups) {
@@ -433,7 +567,7 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
             Set<GroupableActivity> activities = group.getActivities();
             WorkGroup workGroup = new WorkGroup();
             // Fill the work groups with the external identifiers
-            if(externalIdentifiers == null || externalIdentifiers.isEmpty()) {
+            if (externalIdentifiers == null || externalIdentifiers.isEmpty()) {
                 // Initialize the ids as an empty list
                 workGroup.getIdentifiers().getExternalIdentifier();
             } else {
@@ -442,7 +576,7 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
                     workGroup.getIdentifiers().getExternalIdentifier().add(workExtId.clone());
                 }
             }
-            
+
             // Fill the work group with the list of activities
             for (GroupableActivity activity : activities) {
                 WorkSummary workSummary = (WorkSummary) activity;
@@ -465,7 +599,7 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
             Set<GroupableActivity> activities = group.getActivities();
             WorkGroupExtended workGroup = new WorkGroupExtended();
             // Fill the work groups with the external identifiers
-            if(externalIdentifiers == null || externalIdentifiers.isEmpty()) {
+            if (externalIdentifiers == null || externalIdentifiers.isEmpty()) {
                 // Initialize the ids as an empty list
                 workGroup.getIdentifiers().getExternalIdentifier();
             } else {
@@ -495,6 +629,6 @@ public class WorkManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl implements 
             return o.toString();
         }
         return null;
-    }    
-    
+    }
+
 }

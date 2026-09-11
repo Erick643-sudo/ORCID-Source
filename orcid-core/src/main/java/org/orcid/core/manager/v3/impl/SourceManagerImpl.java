@@ -1,15 +1,11 @@
 package org.orcid.core.manager.v3.impl;
 
-import java.util.Collection;
-
-import javax.annotation.Resource;
-
 import org.apache.commons.lang3.StringUtils;
+import org.orcid.core.common.util.AuthenticationUtils;
 import org.orcid.core.manager.ClientDetailsManager;
 import org.orcid.core.manager.SourceNameCacheManager;
 import org.orcid.core.manager.v3.SourceManager;
-import org.orcid.core.oauth.OrcidProfileUserDetails;
-import org.orcid.core.security.OrcidWebRole;
+import org.orcid.core.oauth.OrcidBearerTokenAuthentication;
 import org.orcid.jaxb.model.v3.release.common.Source;
 import org.orcid.jaxb.model.v3.release.common.SourceClientId;
 import org.orcid.jaxb.model.v3.release.common.SourceName;
@@ -17,18 +13,12 @@ import org.orcid.jaxb.model.v3.release.common.SourceOrcid;
 import org.orcid.persistence.dao.OrcidOauth2TokenDetailDao;
 import org.orcid.persistence.dao.ProfileDao;
 import org.orcid.persistence.jpa.entities.ClientDetailsEntity;
-import org.orcid.persistence.jpa.entities.OrcidOauth2TokenDetail;
 import org.orcid.persistence.jpa.entities.ProfileEntity;
 import org.orcid.persistence.jpa.entities.SourceEntity;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.provider.OAuth2Authentication;
-import org.springframework.security.oauth2.provider.OAuth2Request;
-import org.springframework.security.oauth2.provider.authentication.OAuth2AuthenticationDetails;
-import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken;
-import org.springframework.security.web.authentication.switchuser.SwitchUserGrantedAuthority;
 
 /**
  * 
@@ -37,16 +27,15 @@ import org.springframework.security.web.authentication.switchuser.SwitchUserGran
  */
 public class SourceManagerImpl implements SourceManager {
 
-    @Resource
+    @Autowired
     private ProfileDao profileDao;
 
-    @Resource
+    @Autowired
+    @Lazy
     private ClientDetailsManager clientDetailsManager;   
-    
-    @Resource
-    private OrcidOauth2TokenDetailDao orcidOauth2TokenDetailDao;
-    
-    @Resource
+
+    @Autowired
+    @Lazy
     private SourceNameCacheManager sourceNameCacheManager;
     
     /** returns the active source, either an effective ORCID iD or Client Id.
@@ -54,21 +43,7 @@ public class SourceManagerImpl implements SourceManager {
      */
     @Override
     public String retrieveActiveSourceId() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null) {
-            return null;
-        }
-        // Token endpoint
-        if (UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication.getClass())) {
-            return ((UsernamePasswordAuthenticationToken) authentication).getName();
-        }
-        // API
-        if (OAuth2Authentication.class.isAssignableFrom(authentication.getClass())) {
-            OAuth2Request authorizationRequest = ((OAuth2Authentication) authentication).getOAuth2Request();
-            return authorizationRequest.getClientId();
-        }
-        // Normal web user
-        return retrieveEffectiveOrcid(authentication);
+        return AuthenticationUtils.retrieveActiveSourceId();
     }
 
     /** This should be used by managers that need active Source information, including OBO.
@@ -81,39 +56,42 @@ public class SourceManagerImpl implements SourceManager {
         if (authentication == null) {
             return null;
         }
-         
-        // API
-        if (OAuth2Authentication.class.isAssignableFrom(authentication.getClass())) {
-            OAuth2Request authorizationRequest = ((OAuth2Authentication) authentication).getOAuth2Request();
-            String clientId = authorizationRequest.getClientId();
+        Source source = new Source();
+
+        // API authentication
+        if (OrcidBearerTokenAuthentication.class.isAssignableFrom(authentication.getClass())) {
+            OrcidBearerTokenAuthentication authDetails = (OrcidBearerTokenAuthentication) authentication;
+            String clientId = authDetails.getClientId();
             ClientDetailsEntity clientDetails = clientDetailsManager.findByClientId(clientId);
-            Source source = new Source();
+
             source.setSourceClientId(new SourceClientId(clientId));
             source.setSourceName(new SourceName(clientDetails.getClientName()));  
-            
-            //OBO if needed
-            OAuth2AuthenticationDetails authDetails = (OAuth2AuthenticationDetails)((OAuth2Authentication) authentication).getDetails();
-            if (authDetails !=null && authDetails.getTokenValue() != null) { //check here because mock tests can't cope otherwise.
-                OrcidOauth2TokenDetail tokenDetail = orcidOauth2TokenDetailDao.findByTokenValue(authDetails.getTokenValue());
-                if (!StringUtils.isEmpty(tokenDetail.getOboClientDetailsId())){
-                    ClientDetailsEntity oboClientDetails = clientDetailsManager.findByClientId(tokenDetail.getOboClientDetailsId());
-                    source.setAssertionOriginClientId(new SourceClientId(oboClientDetails.getClientId()));
-                    source.setAssertionOriginName(new SourceName(oboClientDetails.getClientName()));  
-                } else if (tokenDetail.getOrcid() != null && clientDetails.isUserOBOEnabled()) {
-                    source.setAssertionOriginOrcid(new SourceOrcid(tokenDetail.getOrcid()));
-                    source.setAssertionOriginName(new SourceName(sourceNameCacheManager.retrieve(tokenDetail.getOrcid())));
+
+            // Check member OBO
+            if (StringUtils.isNotBlank(authDetails.getOboClientId())) {
+                String oboClientId = authDetails.getOboClientId();
+                ClientDetailsEntity oboClientDetails = clientDetailsManager.findByClientId(oboClientId);
+                source.setAssertionOriginClientId(new SourceClientId(oboClientId));
+                source.setAssertionOriginName(new SourceName(oboClientDetails.getClientName()));
+            } else if (clientDetails.isUserOBOEnabled()) {
+                // Check user OBO
+                String userOrcid = authDetails.getUserOrcid();
+                if (StringUtils.isNotBlank(userOrcid)) {
+                    source.setAssertionOriginOrcid(new SourceOrcid(userOrcid));
+                    source.setAssertionOriginName(new SourceName(sourceNameCacheManager.retrieve(userOrcid)));
                 }
             }
-            return source;
+        } else {
+            // User authentication
+            String userOrcid = AuthenticationUtils.retrieveEffectiveOrcid();
+            if (userOrcid == null) {
+                // Must be system role
+                return null;
+            }
+            // Normal web user
+            source.setSourceOrcid(new SourceOrcid(userOrcid));
         }
-        String userOrcid = retrieveEffectiveOrcid(authentication);
-        if(userOrcid == null){
-            // Must be system role
-            return null;
-        }
-        // Normal web user
-        Source source = new Source();
-        source.setSourceOrcid(new SourceOrcid(userOrcid));
+
         return source;
     }
     
@@ -127,87 +105,36 @@ public class SourceManagerImpl implements SourceManager {
         if (authentication == null) {
             return null;
         }
-         
-        // API
-        if (OAuth2Authentication.class.isAssignableFrom(authentication.getClass())) {
-            OAuth2Request authorizationRequest = ((OAuth2Authentication) authentication).getOAuth2Request();
-            String clientId = authorizationRequest.getClientId();
-            ClientDetailsEntity clientDetails = clientDetailsManager.findByClientId(clientId);
-            SourceEntity sourceEntity = new SourceEntity();
-            sourceEntity.setSourceClient(new ClientDetailsEntity(clientId, clientDetails.getClientName()));            
-            return sourceEntity;
-        }
-        String userOrcid = retrieveEffectiveOrcid(authentication);
-        if(userOrcid == null){
-            // Must be system role
-            return null;
-        }
-        // Normal web user
+
         SourceEntity sourceEntity = new SourceEntity();
-        sourceEntity.setSourceProfile(new ProfileEntity(userOrcid));
-        sourceEntity.setCachedSourceName(sourceNameCacheManager.retrieve(userOrcid));
+        // API authentication
+        if (OrcidBearerTokenAuthentication.class.isAssignableFrom(authentication.getClass())) {
+            OrcidBearerTokenAuthentication authDetails = (OrcidBearerTokenAuthentication) authentication;
+            String clientId = authDetails.getClientId();
+            ClientDetailsEntity clientDetails = clientDetailsManager.findByClientId(clientId);
+            sourceEntity.setSourceClient(new ClientDetailsEntity(clientId, clientDetails.getClientName()));
+        } else {
+            // User authentication
+            String userOrcid = AuthenticationUtils.retrieveEffectiveOrcid();
+            if (userOrcid == null) {
+                // Must be system role
+                return null;
+            }
+            sourceEntity.setSourceProfile(new ProfileEntity(userOrcid));
+            sourceEntity.setCachedSourceName(sourceNameCacheManager.retrieve(userOrcid));
+        }
         
         return sourceEntity;
     }
 
-    private String retrieveEffectiveOrcid(Authentication authentication) {
-        if (authentication.getDetails() != null && OrcidProfileUserDetails.class.isAssignableFrom(authentication.getDetails().getClass())) {
-            return ((OrcidProfileUserDetails) authentication.getDetails()).getOrcid();
-        }
-        return null;
-    }
-
-    private String retrieveEffectiveOrcid() {
-        return retrieveEffectiveOrcid(SecurityContextHolder.getContext().getAuthentication());
-    }
-
     @Override
     public boolean isInDelegationMode() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        String realUserOrcid = getRealUserIfInDelegationMode(authentication);
-        if (realUserOrcid == null) {
-            return false;
-        }
-        return !retrieveEffectiveOrcid().equals(realUserOrcid);
+        return AuthenticationUtils.isInDelegationMode();
     }
 
     @Override
     public String retrieveRealUserOrcid() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null) {
-            return null;
-        }
-        // API
-        if (OAuth2Authentication.class.isAssignableFrom(authentication.getClass())) {
-            OAuth2Request authorizationRequest = ((OAuth2Authentication) authentication).getOAuth2Request();
-            return authorizationRequest.getClientId();
-        }
-        // Delegation mode
-        String realUserIfInDelegationMode = getRealUserIfInDelegationMode(authentication);
-        if (realUserIfInDelegationMode != null) {
-            return realUserIfInDelegationMode;
-        }
-        // Normal web user
-        return retrieveEffectiveOrcid(authentication);
-    }
-
-    private String getRealUserIfInDelegationMode(Authentication authentication) {
-        if (authentication != null) {
-            Collection<? extends GrantedAuthority> authorities = authentication.getAuthorities();
-            if (authorities != null) {
-                for (GrantedAuthority authority : authorities) {
-                    if (authority instanceof SwitchUserGrantedAuthority) {
-                        SwitchUserGrantedAuthority suga = (SwitchUserGrantedAuthority) authority;
-                        Authentication sourceAuthentication = suga.getSource();
-                        if ((sourceAuthentication instanceof UsernamePasswordAuthenticationToken || sourceAuthentication instanceof PreAuthenticatedAuthenticationToken)
-                                && sourceAuthentication.getDetails() instanceof OrcidProfileUserDetails) {
-                            return ((OrcidProfileUserDetails) sourceAuthentication.getDetails()).getOrcid();
-                        }
-                    }
-                }
-            }
-        }
-        return null;
+        return AuthenticationUtils.retrieveRealUserOrcid();
     }
 
     @Override
@@ -221,22 +148,7 @@ public class SourceManagerImpl implements SourceManager {
 
     @Override
     public boolean isDelegatedByAnAdmin() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication != null) {
-            Collection<? extends GrantedAuthority> authorities = authentication.getAuthorities();
-            if (authorities != null) {
-                for (GrantedAuthority authority : authorities) {
-                    if (authority instanceof SwitchUserGrantedAuthority) {
-                        SwitchUserGrantedAuthority suga = (SwitchUserGrantedAuthority) authority;
-                        Authentication sourceAuthentication = suga.getSource();
-                        if (sourceAuthentication instanceof UsernamePasswordAuthenticationToken && sourceAuthentication.getDetails() instanceof OrcidProfileUserDetails) {
-                            return ((OrcidProfileUserDetails) sourceAuthentication.getDetails()).getAuthorities().contains(OrcidWebRole.ROLE_ADMIN);
-                        }
-                    }
-                }
-            }
-        }
-        return false;
+        return AuthenticationUtils.isDelegatedByAnAdmin();
     }
     
 }

@@ -1,13 +1,15 @@
 package org.orcid.frontend.web.controllers;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.orcid.core.manager.BackupCodeManager;
+import org.orcid.core.manager.EncryptionManager;
 import org.orcid.core.manager.ProfileEntityCacheManager;
 import org.orcid.core.manager.TwoFactorAuthenticationManager;
 import org.orcid.frontend.email.RecordEmailSender;
+import org.orcid.persistence.jpa.entities.ProfileEntity;
 import org.orcid.pojo.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,10 +44,21 @@ public class TwoFactorAuthenticationController extends BaseController {
     @Resource 
     private RecordEmailSender recordEmailSender;
 
+    @Resource
+    private EncryptionManager encryptionManager;
+
     @RequestMapping("/status.json")
     public @ResponseBody TwoFactorAuthStatus get2FAStatus() {
         TwoFactorAuthStatus status = new TwoFactorAuthStatus();
-        status.setEnabled(twoFactorAuthenticationManager.userUsing2FA(getCurrentUserOrcid()));
+        String orcid = getCurrentUserOrcid();
+        status.setEnabled(twoFactorAuthenticationManager.userUsing2FA(orcid));
+        if (status.isEnabled()) {
+            java.util.Date creationDate = backupCodeManager.getBackupCodesCreationDate(orcid);
+            if (creationDate != null) {
+                status.setTwoFactorCreationDate(org.orcid.pojo.ajaxForm.Date.valueOf(creationDate));
+                status.setRecoveryCodeCreationDate(org.orcid.pojo.ajaxForm.Date.valueOf(creationDate));
+            }
+        }
         return status;
     }
 
@@ -60,11 +73,22 @@ public class TwoFactorAuthenticationController extends BaseController {
     }
 
     @RequestMapping(value = "/disable.json", method = RequestMethod.POST)
-    public @ResponseBody TwoFactorAuthStatus disable2FA() {
+    public @ResponseBody TwoFactorAuthStatus disable2FA(HttpServletRequest request, @RequestBody TwoFactorAuthStatus form) {
         String orcid = getCurrentUserOrcid();
+        ProfileEntity profile = profileEntityCacheManager.retrieve(getCurrentUserOrcid());
+
+        if (form.getPassword() == null || !encryptionManager.hashMatches(form.getPassword(), profile.getEncryptedPassword())) {
+            form.setInvalidPassword(true);
+            return form;
+        }
+        if (!twoFactorAuthenticationManager.validateTwoFactorAuthForm(getCurrentUserOrcid(), form)) {
+            return form;
+        }
+
         twoFactorAuthenticationManager.disable2FA(orcid);
         recordEmailSender.send2FADisabledEmail(orcid);
-        return get2FAStatus();
+        form.setSuccess(true);
+        return form;
     }
 
     @RequestMapping("/QRCode.json")
@@ -75,7 +99,9 @@ public class TwoFactorAuthenticationController extends BaseController {
     }
     
     @RequestMapping(value = "/qr-code.png", method = RequestMethod.GET, produces = MediaType.IMAGE_PNG_VALUE)
-    public @ResponseBody byte[] generateQrCode() {
+    @ResponseBody
+    public byte[] generateQrCode(HttpServletResponse response) {
+        response.addHeader("Cache-Control", "no-cache,no-store,must-revalidate");
         return QRCode.from(twoFactorAuthenticationManager.getQRCode(getCurrentUserOrcid())).withSize(250, 250).stream().toByteArray();
     }
 
@@ -91,7 +117,9 @@ public class TwoFactorAuthenticationController extends BaseController {
         registration.setValid(valid);
         if (valid) {
             List<String> backupCodes = twoFactorAuthenticationManager.enable2FA(orcid);
-            registration.setBackupCodes(backupCodes);
+            registration.setBackupCodes(backupCodes);            
+            //send email notification
+            recordEmailSender.send2FAEnabledEmail(orcid);
         }
         return registration;
     }

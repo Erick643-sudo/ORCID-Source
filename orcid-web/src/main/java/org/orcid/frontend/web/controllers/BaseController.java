@@ -18,10 +18,10 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.ws.rs.core.UriBuilder;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.ws.rs.core.UriBuilder;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.StringEscapeUtils;
@@ -39,7 +39,6 @@ import org.orcid.core.manager.v3.read_only.ExternalIdentifierManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.PersonalDetailsManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.ProfileKeywordManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.ResearcherUrlManagerReadOnly;
-import org.orcid.core.oauth.OrcidProfileUserDetails;
 import org.orcid.core.togglz.Features;
 import org.orcid.core.utils.ReleaseNameUtils;
 import org.orcid.frontend.web.forms.validate.OrcidUrlValidator;
@@ -79,7 +78,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -199,19 +200,21 @@ public class BaseController {
         this.domainsAllowingRobots = domainsAllowingRobots;
     }
 
-    protected OrcidProfileUserDetails getCurrentUser() {
+    protected UserDetails getCurrentUser() {
         return baseControllerUtil.getCurrentUser(SecurityContextHolder.getContext());
     }
 
     protected void logoutCurrentUser(HttpServletRequest request, HttpServletResponse response) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication != null && authentication.isAuthenticated()) {
-            new SecurityContextLogoutHandler().logout(request, response, authentication);
+            SecurityContextLogoutHandler handler = new SecurityContextLogoutHandler();
+            handler.setSecurityContextRepository(new HttpSessionSecurityContextRepository());
+            handler.logout(request, response, authentication);
         }        
     }
 
     protected boolean isEmailOkForCurrentUser(String decryptedEmail) {
-        OrcidProfileUserDetails userDetails = getCurrentUser();
+        UserDetails userDetails = getCurrentUser();
         if (userDetails == null) {
             return true;
         }
@@ -320,7 +323,7 @@ public class BaseController {
     }
 
     boolean emailMatchesUser(String orcid, String email) {
-        OrcidProfileUserDetails currentUser = getCurrentUser();
+        UserDetails currentUser = getCurrentUser();
         if (currentUser == null) {
             return false;
         }
@@ -389,12 +392,26 @@ public class BaseController {
         }
     }
 
+    /**
+     * Deprecated: Use setErrorCode instead. The frontend is responsible for
+     * translating error codes into user-facing strings.
+     */
+    @Deprecated
     protected void setError(ErrorsInterface ei, String msg) {
         ei.getErrors().add(getMessage(msg));
     }
 
+    /**
+     * Deprecated: Use setErrorCode instead. The frontend is responsible for
+     * translating error codes into user-facing strings.
+     */
+    @Deprecated
     protected void setError(ErrorsInterface ei, String msg, Object... messageParams) {
         ei.getErrors().add(getMessage(msg, messageParams));
+    }
+
+    protected void setErrorCode(ErrorsInterface ei, String code) {
+        ei.getErrors().add(code);
     }
 
     protected void validateBiography(Text text) {
@@ -794,11 +811,11 @@ public class BaseController {
 
     @ModelAttribute("effectiveUserOrcid")
     public String getEffectiveUserOrcid() {
-        OrcidProfileUserDetails currentUser = getCurrentUser();
+        UserDetails currentUser = getCurrentUser();
         if (currentUser == null) {
             return null;
         }
-        return currentUser.getOrcid();
+        return currentUser.getUsername();
     }
     
     protected String getCurrentUserOrcid() {
@@ -871,20 +888,12 @@ public class BaseController {
         }
         Map<String, String> countryNames = new HashMap<String, String>();
         if (publicAddresses != null && publicAddresses.getAddress() != null) {
-            Address publicAddress = null;
             // The primary address will be the one with the lowest display index
             for (Address address : publicAddresses.getAddress()) {
                 countryNames.put(address.getCountry().getValue().name(), getcountryName(address.getCountry().getValue().name()));
-                if (publicAddress == null) {
-                    publicAddress = address;
-                }
             }
-            if (publicAddress != null) {
-                publicRecordPersonDetails.setPublicAddress(publicAddress);
-                publicRecordPersonDetails.setCountryNames(countryNames);
-                Map<String, List<Address>> groupedAddresses = groupAddresses(publicAddresses);
-                publicRecordPersonDetails.setPublicGroupedAddresses(groupedAddresses);
-            }
+            publicRecordPersonDetails.setCountryNames(countryNames);
+            publicRecordPersonDetails.setPublicGroupedAddresses(groupAddresses(publicAddresses));
         }
 
         // Fill keywords

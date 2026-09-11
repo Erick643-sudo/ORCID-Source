@@ -5,8 +5,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import javax.annotation.Resource;
-import javax.ws.rs.core.Response;
+import jakarta.annotation.Resource;
+import jakarta.ws.rs.core.Response;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -648,8 +648,8 @@ public class MemberV2ApiServiceDelegator_ReadPersonTest extends DBUnitTest {
             if(e.getEmail().equals("limited_verified_0000-0000-0000-0001@test.orcid.org")) {
                 assertTrue(e.isVerified());
                 // The source and name on verified professional email addresses should change
-                assertEquals("0000-0000-0000-0000", e.getSource().retrieveSourcePath());
-                assertEquals("ORCID email validation", e.getSource().getSourceName().getContent());
+                assertEquals("APP-5555555555555555", e.getSource().retrieveSourcePath());
+                assertEquals("Source Client 1", e.getSource().getSourceName().getContent());
             } else if(e.getEmail().equals("verified_non_professional@nonprofessional.org")) {
                 assertTrue(e.isVerified());
                 // The source and name on non professional email addresses should not change

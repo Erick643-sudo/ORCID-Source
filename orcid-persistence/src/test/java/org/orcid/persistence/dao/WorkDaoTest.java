@@ -10,12 +10,14 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.FixMethodOrder;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.MethodSorters;
 import org.orcid.persistence.jpa.entities.WorkEntity;
 import org.orcid.test.DBUnitTest;
 import org.orcid.test.OrcidJUnit4ClassRunner;
@@ -23,6 +25,7 @@ import org.springframework.test.context.ContextConfiguration;
 
 @RunWith(OrcidJUnit4ClassRunner.class)
 @ContextConfiguration(locations = { "classpath:test-orcid-persistence-context.xml" })
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class WorkDaoTest extends DBUnitTest {
 
     private static String USER_ORCID = "4444-4444-4444-4443";
@@ -40,6 +43,30 @@ public class WorkDaoTest extends DBUnitTest {
     @AfterClass
     public static void removeDBUnitData() throws Exception {
         removeDBUnitData(Arrays.asList("/data/WorksEntityData.xml", "/data/ProfileEntityData.xml", "/data/SourceClientDetailsEntityData.xml"));
+    }
+
+    @Test
+    public void getWorksByOrcid() {
+        List<Object[]> works = dao.getWorksByOrcid(USER_ORCID, false);
+        assertEquals(3, works.size());
+        List<Integer> featuredWorks = new ArrayList<Integer>();
+        for (Object[] result : works) {
+            int featuredDisplayIndex = (int) result[17];
+            if (featuredDisplayIndex > 0) {
+                featuredWorks.add(featuredDisplayIndex);
+            };
+        }
+        assertEquals(featuredWorks.size(), 2);
+    }
+
+    @Test
+    public void getFeaturedWorksByOrcid() {
+        List<Object[]> works = dao.getWorksByOrcid(USER_ORCID, true);
+        assertEquals(2, works.size());
+        for (Object[] result : works) {
+            int featuredDisplayIndex = (int) result[17];
+            assertTrue(featuredDisplayIndex > 0);
+        }
     }
 
     @Test
@@ -61,16 +88,52 @@ public class WorkDaoTest extends DBUnitTest {
         assertEquals((initialNumber - elementThatBelogsToUser), finalNumberOfElements);
     }
 
+    /**
+     * Put-codes are sequential across the whole registry, so they identify a work but say
+     * nothing about who owns it. A delete asked for by somebody else must not happen.
+     */
     @Test
-    public void getWorksByOrcidIdTest() {
-        List<WorkEntity> works = dao.getWorksByOrcidId("0000-0000-0000-0003");
-        List<Long> existingIds = new ArrayList<Long>(Arrays.asList(11L, 12L, 13L, 14L, 15L, 16L));
-        assertEquals(6, works.size());
-        for(WorkEntity w : works) {
-            assertTrue(existingIds.contains(w.getId()));
-            existingIds.remove(w.getId());
-        }
-        assertTrue("Elements not found: " + existingIds, existingIds.isEmpty());
+    public void crossAccountRemoveWorksLeavesTheWorkInPlaceTest() {
+        WorkEntity victimWork = dao.getWork(OTHER_USER_ORCID, 11L);
+        assertNotNull(victimWork);
+
+        boolean removed = dao.removeWorks(USER_ORCID, Arrays.asList(11L));
+
+        assertFalse("removing another record's work must not report success", removed);
+        dao.detach(victimWork);
+        assertNotNull("another record's work must survive", dao.getWork(OTHER_USER_ORCID, 11L));
+    }
+
+    /**
+     * Same defect on the visibility path: flipping somebody else's private work to public
+     * would publish it to the anonymous API.
+     */
+    @Test
+    public void crossAccountUpdateVisibilitiesLeavesVisibilityUnchangedTest() {
+        WorkEntity victimWork = dao.getWork(OTHER_USER_ORCID, 13L);
+        assertNotNull(victimWork);
+        String before = victimWork.getVisibility();
+        assertEquals("PRIVATE", before);
+
+        boolean updated = dao.updateVisibilities(USER_ORCID, Arrays.asList(13L), "PUBLIC");
+
+        assertFalse("re-visibilitying another record's work must not report success", updated);
+        dao.detach(victimWork);
+        assertEquals("visibility must be untouched", before, dao.getWork(OTHER_USER_ORCID, 13L).getVisibility());
+    }
+
+    /**
+     * Runs last: it mutates. A batch mixing owned and unowned put-codes now applies only the
+     * owned ones, so the caller must not be told the whole request succeeded.
+     */
+    @Test
+    public void zPartialBatchIsNotReportedAsSuccessTest() {
+        long absentPutCode = 999999L;
+        assertNotNull(dao.getWork(OTHER_USER_ORCID, 14L));
+
+        boolean updated = dao.updateVisibilities(OTHER_USER_ORCID, Arrays.asList(14L, absentPutCode), "PUBLIC");
+
+        assertFalse("a partially applied batch must not report success", updated);
     }
 
     @Test
@@ -110,5 +173,17 @@ public class WorkDaoTest extends DBUnitTest {
         assertEquals(e.getLastModified(), e2.getLastModified());
         assertEquals(e.getDateCreated(), e2.getDateCreated());
         assertEquals(e2.getDateCreated(), e2.getLastModified());
+    }
+
+    @Test
+    public void getWorksByOrcidId_Deprecated() {
+        List<WorkEntity> works = dao.getWorksByOrcidId("0000-0000-0000-0003");
+        List<Long> existingIds = new ArrayList<Long>(Arrays.asList(11L, 12L, 13L, 14L, 15L, 16L));
+        assertEquals(6, works.size());
+        for(WorkEntity w : works) {
+            assertTrue(existingIds.contains(w.getId()));
+            existingIds.remove(w.getId());
+        }
+        assertTrue("Elements not found: " + existingIds, existingIds.isEmpty());
     }
 }

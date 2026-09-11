@@ -1,0 +1,32 @@
+package org.orcid.core.manager.v3.impl;
+
+import org.orcid.core.manager.v3.ProfileInterstitialFlagManager;
+import org.orcid.core.manager.v3.read_only.impl.ProfileInterstitialFlagManagerReadOnlyImpl;
+import org.orcid.persistence.dao.ProfileInterstitialFlagDao;
+import org.orcid.persistence.jpa.entities.ProfileInterstitialFlagEntity;
+
+import jakarta.annotation.Resource;
+
+/**
+ * 
+ * @author Andrej Romanov
+ * 
+ */
+public class ProfileInterstitialFlagManagerImpl extends ProfileInterstitialFlagManagerReadOnlyImpl implements ProfileInterstitialFlagManager {
+    @Resource
+    protected ProfileInterstitialFlagDao profileInterstitialFlagDao;
+
+    public ProfileInterstitialFlagEntity addInterstitialFlag(String orcid, String interstitialName) {
+        if (orcid == null || orcid.isBlank()) {
+            throw new IllegalArgumentException("ORCID must not be empty");
+        }
+        if (interstitialName == null || interstitialName.isBlank()) {
+            throw new IllegalArgumentException("Interstitial flag must not be empty");
+        }
+        boolean hasInterstitialFlag = profileInterstitialFlagDaoReadOnly.hasInterstitialFlag(orcid, interstitialName);
+        if (!hasInterstitialFlag) {
+            return profileInterstitialFlagDao.addInterstitialFlag(orcid, interstitialName);
+        }
+        return null;
+    }
+}

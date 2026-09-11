@@ -1,23 +1,26 @@
 package org.orcid.core.common.manager.impl;
 
+import java.util.ArrayList;
 import java.util.List;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
-import liquibase.repackaged.org.apache.commons.lang3.StringUtils;
+import org.ehcache.Cache;
 import org.orcid.core.common.manager.EmailDomainManager;
+import org.orcid.core.manager.v3.impl.ProfileEmailDomainManagerImpl;
 import org.orcid.core.utils.SourceEntityUtils;
 import org.orcid.core.utils.emailDomain.EmailDomainValidator;
-import org.orcid.jaxb.model.common_v2.Source;
-import org.orcid.jaxb.model.record_v2.Email;
-import org.orcid.jaxb.model.record_v2.Emails;
 import org.orcid.persistence.dao.EmailDomainDao;
 import org.orcid.persistence.jpa.entities.EmailDomainEntity;
 import org.orcid.persistence.jpa.entities.EmailDomainEntity.DomainCategory;
 
 import com.google.common.net.InternetDomainName;
+import org.orcid.pojo.EmailDomain;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class EmailDomainManagerImpl implements EmailDomainManager {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ProfileEmailDomainManagerImpl.class);
 
     public enum STATUS {CREATED, UPDATED};
     
@@ -29,6 +32,9 @@ public class EmailDomainManagerImpl implements EmailDomainManager {
 
     @Resource
     private SourceEntityUtils sourceEntityUtils;
+
+    @Resource(name = "emailDomainCache")
+    private Cache<String, List<EmailDomain>> emailDomainCache;
 
     private void validateEmailDomain(String emailDomain) {
         if (emailDomain == null || emailDomain.isBlank()) {
@@ -42,6 +48,7 @@ public class EmailDomainManagerImpl implements EmailDomainManager {
     @Override
     public EmailDomainEntity createEmailDomain(String emailDomain, DomainCategory category) {        
         validateEmailDomain(emailDomain);
+        emailDomain = emailDomain.toLowerCase().trim();
         if (category == null) {
             throw new IllegalArgumentException("Category must not be empty");
         }
@@ -56,24 +63,56 @@ public class EmailDomainManagerImpl implements EmailDomainManager {
         return emailDomainDao.updateCategory(id, category);
     }
 
+    private List<EmailDomain> getEmailDomainCache(String emailDomain) {
+        if (emailDomainCache.containsKey(emailDomain)) {
+            return emailDomainCache.get(emailDomain);
+        }
+        return null;
+    }
+
     @Override
-    public List<EmailDomainEntity>  findByEmailDomain(String emailDomain) {
+    public List<EmailDomain>  findByEmailDomain(String emailDomain) {
         if (emailDomain == null || emailDomain.isBlank()) {
             throw new IllegalArgumentException("Email Domain must not be empty");
         }
+        emailDomain = emailDomain.toLowerCase().trim();
 
+        List<EmailDomain> cachedEmailDomain = getEmailDomainCache(emailDomain);
+        if (cachedEmailDomain != null) {
+            LOGGER.debug("Retrieving cache for email domain {}", emailDomain);
+            return cachedEmailDomain;
+        }
+
+        List<EmailDomain> results = resolveEmailDomain(emailDomain);
+        emailDomainCache.put(emailDomain, results);
+        return results;
+    }
+
+    private List<EmailDomain> resolveEmailDomain(String emailDomain) {
+        LOGGER.debug("Resolving email domain {}", emailDomain);
         // Fetch entries for the current email domain
-        List<EmailDomainEntity> results = emailDomainDaoReadOnly.findByEmailDomain(emailDomain);
+        List<EmailDomainEntity> entities = emailDomainDaoReadOnly.findByEmailDomain(emailDomain);
 
         // If no results and domain contains a dot, strip the first subdomain and recurse
-        if (results.isEmpty() && emailDomain.contains(".")) {
+        if (entities.isEmpty() && emailDomain.contains(".")) {
             String strippedDomain = emailDomain.substring(emailDomain.indexOf(".") + 1);
             if(EmailDomainValidator.getInstance().isValidEmailDomain(strippedDomain)) {
-                return findByEmailDomain(strippedDomain); // Recursive call with stripped domain
+                return resolveEmailDomain(strippedDomain); // Recursive call with stripped domain
             }
         }
 
-        // Return the results (either found or empty if no more subdomains)
+        List<EmailDomain> results = new ArrayList<>();
+
+        // convert to pojo to be more cache-friendly
+        for (EmailDomainEntity entity : entities) {
+            EmailDomain domain = new EmailDomain();
+            domain.setEmailDomain(entity.getEmailDomain());
+            domain.setCategory(entity.getCategory());
+            domain.setRorId(entity.getRorId());
+            results.add(domain);
+        }
+
+        // Return the domains (either found or empty if no more subdomains)
         return results;
     }
 
@@ -87,6 +126,10 @@ public class EmailDomainManagerImpl implements EmailDomainManager {
 
     @Override
     public STATUS createOrUpdateEmailDomain(String emailDomain, String rorId) {
+        if (emailDomain == null || emailDomain.isBlank()) {
+            throw new IllegalArgumentException("Email Domain must not be empty");
+        }
+        emailDomain = emailDomain.toLowerCase().trim();
         List<EmailDomainEntity>  existingEntities = emailDomainDaoReadOnly.findByEmailDomain(emailDomain);
         if(existingEntities != null && !existingEntities.isEmpty()) {
             if(existingEntities.size() == 1) {
@@ -104,68 +147,4 @@ public class EmailDomainManagerImpl implements EmailDomainManager {
         }
         return null;
     }
-
-    @Override
-    public void processProfessionalEmailsForV2API(org.orcid.jaxb.model.record_v2.Emails emails) {
-        if(emails == null || emails.getEmails() == null) {
-            return;
-        }
-        for (org.orcid.jaxb.model.record_v2.Email email : emails.getEmails()) {
-            if (email.isVerified()) {
-                String domain = email.getEmail().split("@")[1];
-                List<EmailDomainEntity> domainsInfo = findByEmailDomain(domain);
-                String category = EmailDomainEntity.DomainCategory.UNDEFINED.name();
-                // Set appropriate source name and source id for professional
-                // emails
-                if (domainsInfo != null) {
-                    for (EmailDomainEntity domainInfo : domainsInfo) {
-                        category = domainInfo.getCategory().name();
-                        if (StringUtils.equalsIgnoreCase(category, EmailDomainEntity.DomainCategory.PROFESSIONAL.name())) {
-                            break;
-                        }
-                    }
-                    if (StringUtils.equalsIgnoreCase(category, EmailDomainEntity.DomainCategory.PROFESSIONAL.name())) {
-                        if(email.getSource() == null) {
-                            email.setSource(new org.orcid.jaxb.model.common_v2.Source());
-                        }
-                        email.setSource(sourceEntityUtils.convertEmailSourceToOrcidValidator(email.getSource()));
-                    }
-                }
-            }
-        }
-    }
-
-    @Override
-    public void processProfessionalEmailsForV3API(org.orcid.jaxb.model.v3.release.record.Emails emails) {
-        if(emails == null || emails.getEmails() == null) {
-            return;
-        }
-        for (org.orcid.jaxb.model.v3.release.record.Email email : emails.getEmails()) {
-            if (email.isVerified()) {
-                String domain = email.getEmail().split("@")[1];
-                List<EmailDomainEntity> domainsInfo = findByEmailDomain(domain);
-                String category = EmailDomainEntity.DomainCategory.UNDEFINED.name();
-                // Set appropriate source name and source id for professional
-                // emails
-                if (domainsInfo != null) {
-                    for (EmailDomainEntity domainInfo : domainsInfo) {
-                        category = domainInfo.getCategory().name();
-                        if (StringUtils.equalsIgnoreCase(category, EmailDomainEntity.DomainCategory.PROFESSIONAL.name())) {
-                            break;
-                        }
-                    }
-                    if (StringUtils.equalsIgnoreCase(category, EmailDomainEntity.DomainCategory.PROFESSIONAL.name())) {
-                        if(email.getSource() == null) {
-                            email.setSource(new org.orcid.jaxb.model.v3.release.common.Source());
-                        }
-                        email.setSource(sourceEntityUtils.convertEmailSourceToOrcidValidator(email.getSource()));
-                    }
-                }
-            }
-        }
-    }
-
-    // TODO: processProfessionalEmailsForV2API and processProfessionalEmailsForV3API can be merged if we make
-    //  org.orcid.jaxb.model.record_v2.Emails and org.orcid.jaxb.model.v3.release.record.Emails implement from an
-    //  interface that we can call EmailDomainsHolder
 }

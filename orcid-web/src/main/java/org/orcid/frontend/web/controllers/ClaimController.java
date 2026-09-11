@@ -5,13 +5,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-import javax.annotation.Resource;
-import javax.persistence.NoResultException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.persistence.NoResultException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.apache.commons.codec.binary.Base64;
-import org.apache.jena.sparql.function.library.e;
 import org.jasypt.exceptions.EncryptionOperationNotPossibleException;
 import org.orcid.core.exception.OrcidBadRequestException;
 import org.orcid.core.manager.EncryptionManager;
@@ -64,11 +63,11 @@ public class ClaimController extends BaseController {
     @Resource 
     private RecordEmailSender recordEmailSender;
     
-    @Resource
-    private AuthenticationManager authenticationManager;
-
     @Resource(name = "profileEntityManagerV3")
     private ProfileEntityManager profileEntityManager;
+
+    @Resource
+    private RegistrationController registrationController;
 
     @Value("${org.orcid.core.claimWaitPeriodDays:10}")
     private int claimWaitPeriodDays;
@@ -172,12 +171,18 @@ public class ClaimController extends BaseController {
         boolean claimed = profileEntityManager.claimProfileAndUpdatePreferences(orcid, decryptedEmail, userLocale, claim);
         if (!claimed) {
             throw new IllegalStateException("Unable to claim record " + orcid);
-        }                    
-                
+        }
+
+        // Clear the profile entity cache so the new password is loaded
+        LOGGER.info("Clearing profile cache for orcid id: " + orcid);
+        profileEntityCacheManager.remove(orcid);
+
+        // Log user in
+        registrationController.logUserIn(request, response, orcid, claim.getPassword().getValue());
+
         // Notify
         notificationManager.sendAmendEmail(orcid, AmendedSection.UNKNOWN, null);
-        // Log user in 
-        automaticallyLogin(request, claim.getPassword().getValue(), orcid);
+
         // detech this situation
         String targetUrl = orcidUrlManager.determineFullTargetUrlFromSavedRequest(request, response);
         if (targetUrl == null)
@@ -248,19 +253,5 @@ public class ClaimController extends BaseController {
         recordEmailSender.sendClaimReminderEmail(orcid, (claimWaitPeriodDays - claimReminderAfterDays), email);
         resendClaimRequest.setSuccessMessage(getMessage("resend_claim.successful_resend"));
         return resendClaimRequest;
-    }
-
-    private void automaticallyLogin(HttpServletRequest request, String password, String orcid) {
-        UsernamePasswordAuthenticationToken token = null;
-        try {
-            token = new UsernamePasswordAuthenticationToken(orcid, password);
-            token.setDetails(new WebAuthenticationDetails(request));
-            Authentication authentication = authenticationManager.authenticate(token);
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-        } catch (AuthenticationException e) {
-            // this should never happen
-            SecurityContextHolder.getContext().setAuthentication(null);
-            LOGGER.warn("User " + orcid + " should have been logged-in, but we unable to due to a problem", e, (token != null ? token.getPrincipal() : "empty principle"));
-        }
     }
 }

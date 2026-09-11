@@ -2,7 +2,7 @@ package org.orcid.core.manager.v3.impl;
 
 import java.util.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.orcid.core.manager.ClientDetailsEntityCacheManager;
 import org.orcid.core.manager.ProfileEntityCacheManager;
@@ -28,7 +28,6 @@ import org.orcid.persistence.jpa.entities.ProfileEntity;
 import org.orcid.persistence.jpa.entities.ProfileFundingEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.transaction.annotation.Transactional;
 
 public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl implements ProfileFundingManager {
 
@@ -54,6 +53,9 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
 
     @Resource
     private ClientDetailsEntityCacheManager clientDetailsEntityCacheManager;
+
+    @Resource
+    private SourceEntityUtils sourceEntityUtils;
 
     /**
      * Removes the relationship that exists between a funding and a profile.
@@ -120,7 +122,6 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
      * @return the added funding
      */
     @Override
-    @Transactional
     public Funding createFunding(String orcid, Funding funding, boolean isApiRequest) {
         Source activeSource = sourceManager.retrieveActiveSource();
         activityValidator.validateFunding(funding, activeSource, true, isApiRequest, null);
@@ -143,13 +144,12 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
         profileFundingEntity.setOrg(updatedOrganization);
 
         // Set the source
-        SourceEntityUtils.populateSourceAwareEntityFromSource(activeSource, profileFundingEntity);
+        sourceEntityUtils.populateSourceAwareEntityFromSource(activeSource, profileFundingEntity);
 
         ProfileEntity profile = profileEntityCacheManager.retrieve(orcid);        
         setIncomingPrivacy(profileFundingEntity, profile, isApiRequest);
         DisplayIndexCalculatorHelper.setDisplayIndexOnNewEntity(profileFundingEntity, isApiRequest);
         profileFundingDao.persist(profileFundingEntity);
-        profileFundingDao.flush();
         if (isApiRequest) {
             notificationManager.sendAmendEmail(orcid, AmendedSection.FUNDING, createItemList(profileFundingEntity, funding.getExternalIdentifiers(), ActionType.CREATE));
         }
@@ -183,7 +183,7 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
         Visibility originalVisibility = Visibility.valueOf(pfe.getVisibility());
 
         // Save the original source
-        Source originalSource = SourceEntityUtils.extractSourceFromEntity(pfe, clientDetailsEntityCacheManager);
+        Source originalSource = sourceEntityUtils.extractSourceFromEntity(pfe);
 
         activityValidator.validateFunding(funding, activeSOurce, false, isApiRequest, originalVisibility);
         if (isApiRequest) {
@@ -203,7 +203,7 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
         }
 
         // Be sure it doesn't overwrite the source
-        SourceEntityUtils.populateSourceAwareEntityFromSource(originalSource, pfe);
+        sourceEntityUtils.populateSourceAwareEntityFromSource(originalSource, pfe);
 
         // Updates the give organization with the latest organization from
         // database, or, create a new one
@@ -211,7 +211,6 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
         pfe.setOrg(updatedOrganization);
 
         pfe = profileFundingDao.merge(pfe);
-        profileFundingDao.flush();
         if (isApiRequest) {
             notificationManager.sendAmendEmail(orcid, AmendedSection.FUNDING, createItemList(pfe, funding.getExternalIdentifiers(), ActionType.UPDATE));
         }
@@ -229,7 +228,6 @@ public class ProfileFundingManagerImpl extends ProfileFundingManagerReadOnlyImpl
      * @return true if the funding was deleted, false otherwise
      */
     @Override
-    @Transactional
     public boolean checkSourceAndDelete(String orcid, Long fundingId) {
         ProfileFundingEntity pfe = profileFundingDao.getProfileFunding(orcid, fundingId);
         orcidSecurityManager.checkSourceAndThrow(pfe);

@@ -9,8 +9,8 @@ import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.util.ArrayList;
 
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.UriInfo;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.UriInfo;
 import javax.xml.datatype.DatatypeConfigurationException;
 import javax.xml.datatype.DatatypeFactory;
 import javax.xml.datatype.XMLGregorianCalendar;
@@ -243,7 +243,6 @@ public class RDFWriterTest {
         rdfWriter.writeTo(fakeBio(), Record.class, null, null, new MediaType("application", "ld+json"), null, entityStream);
 
         String str = entityStream.toString("utf-8");
-        System.out.println(str);
         assertTrue(str.contains("\"http://orcid.example.com/000-1337\""));
         assertTrue(str.contains("account"));
         assertTrue(str.contains("\"http://orcid.example.com/000-1337#orcid-id\""));

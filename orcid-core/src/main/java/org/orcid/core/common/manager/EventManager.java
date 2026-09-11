@@ -1,6 +1,6 @@
 package org.orcid.core.common.manager;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.orcid.persistence.jpa.entities.EventType;
 
@@ -12,6 +12,8 @@ import org.orcid.persistence.jpa.entities.EventType;
 public interface EventManager {
 
     void createEvent(EventType eventType, HttpServletRequest request);
+
+    void createReauthorizeEvent(String clientId);
 
     void createPapiEvent(String clientId, String ip, boolean anonymous);
 

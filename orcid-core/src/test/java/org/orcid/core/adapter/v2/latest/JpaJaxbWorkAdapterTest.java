@@ -10,10 +10,10 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 
-import javax.annotation.Resource;
-import javax.xml.bind.JAXBContext;
-import javax.xml.bind.JAXBException;
-import javax.xml.bind.Unmarshaller;
+import jakarta.annotation.Resource;
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.JAXBException;
+import jakarta.xml.bind.Unmarshaller;
 
 import org.junit.After;
 import org.junit.Before;
@@ -38,6 +38,7 @@ import org.orcid.test.OrcidJUnit4ClassRunner;
 import org.orcid.core.utils.DateFieldsOnBaseEntityUtils;
 import org.orcid.utils.DateUtils;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * 
@@ -236,6 +237,71 @@ public class JpaJaxbWorkAdapterTest extends MockSourceNameCache {
     }
 
     @Test
+    public void fromWorkEntityWithBlankSubtitleDoesNotCreateSubtitleWrapper() throws IllegalAccessException {
+        WorkEntity work = getWorkEntity();
+        work.setSubtitle(" ");
+
+        Work mappedWork = jpaJaxbWorkAdapter.toWork(work);
+
+        assertNull(mappedWork.getWorkTitle().getSubtitle());
+    }
+
+    @Test
+    public void fromWorkEntityWithBlankUrlDoesNotCreateUrlWrapper() throws IllegalAccessException {
+        WorkEntity work = getWorkEntity();
+        work.setWorkUrl(" ");
+
+        Work mappedWork = jpaJaxbWorkAdapter.toWork(work);
+
+        assertNull(mappedWork.getUrl());
+    }
+
+    @Test
+    public void fromWorkEntityWithContributorsMissingHostTest() throws Exception {
+        orcidUrlManager.setBaseUrl("https://testserver.orcid.org");
+        WorkEntity work = getWorkEntity();
+        work.setContributorsJson("{\n" +
+                "\t\"contributor\": [{\n" +
+                "\t\t\"contributorOrcid\": {\n" +
+                "\t\t\t\"uri\": \"https://qa.orcid.org/0009-0000-7948-587X\",\n" +
+                "\t\t\t\"path\": \"0009-0000-7948-587X\",\n" +
+                "\t\t\t\"host\": null\n" +
+                "\t\t},\n" +
+                "\t\t\"creditName\": {\n" +
+                "\t\t\t\"content\": \"Test Author\"\n" +
+                "\t\t},\n" +
+                "\t\t\"contributorEmail\": null,\n" +
+                "\t\t\"contributorAttributes\": {\n" +
+                "\t\t\t\"contributorSequence\": null,\n" +
+                "\t\t\t\"contributorRole\": \"AUTHOR\"\n" +
+                "\t\t}\n" +
+                "\t}]\n" +
+                "}");
+
+        Work mappedWork = jpaJaxbWorkAdapter.toWork(work);
+        assertNotNull(mappedWork.getWorkContributors());
+        assertEquals(1, mappedWork.getWorkContributors().getContributor().size());
+        org.orcid.jaxb.model.common_v2.Contributor c = mappedWork.getWorkContributors().getContributor().get(0);
+        assertNotNull(c.getContributorOrcid());
+        assertEquals("qa.orcid.org", c.getContributorOrcid().getHost());
+        assertEquals("0009-0000-7948-587X", c.getContributorOrcid().getPath());
+        assertNotNull(c.getCreditName());
+        assertEquals("Test Author", c.getCreditName().getContent());
+        assertNull(c.getContributorEmail());
+        assertNotNull(c.getContributorAttributes());
+        assertNull(c.getContributorAttributes().getContributorSequence());
+        assertEquals(org.orcid.jaxb.model.common_v2.ContributorRole.AUTHOR, c.getContributorAttributes().getContributorRole());
+
+        // Verify JAXB XML serialization works without AccessorException
+        JAXBContext context = JAXBContext.newInstance(Work.class);
+        java.io.StringWriter writer = new java.io.StringWriter();
+        context.createMarshaller().marshal(mappedWork, writer);
+        String xml = writer.toString();
+        assertTrue(xml.contains("qa.orcid.org"));
+        assertTrue(xml.contains("Test Author"));
+    }
+
+    @Test
     public void fromWorkEntityToWorkSummaryTest() throws IllegalAccessException {
         WorkEntity work = getWorkEntity();
         assertNotNull(work);
@@ -279,6 +345,18 @@ public class JpaJaxbWorkAdapterTest extends MockSourceNameCache {
         mWork.setWorkType(org.orcid.jaxb.model.common.WorkType.DISSERTATION_THESIS.name());
         List<WorkSummary> summaries = jpaJaxbWorkAdapter.toWorkSummaryFromMinimized(Arrays.asList(mWork));
         assertEquals(WorkType.DISSERTATION, summaries.get(0).getType());
+    }
+
+    @Test
+    public void minimizedWorkWithPartialPublicationDateDoesNotCreateEmptyYearWrapper() {
+        PublicationDateEntity entity = new PublicationDateEntity(null, 1, 1);
+
+        org.orcid.jaxb.model.common_v2.PublicationDate publicationDate = ReflectionTestUtils.invokeMethod(
+                jpaJaxbWorkAdapter, "mapPublicationDate", entity);
+
+        assertNull(publicationDate.getYear());
+        assertNotNull(publicationDate.getMonth());
+        assertNotNull(publicationDate.getDay());
     }
     
     @Test

@@ -7,10 +7,10 @@ import static org.junit.Assert.assertNull;
 import java.io.InputStream;
 import java.util.Date;
 
-import javax.annotation.Resource;
-import javax.xml.bind.JAXBContext;
-import javax.xml.bind.JAXBException;
-import javax.xml.bind.Unmarshaller;
+import jakarta.annotation.Resource;
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.JAXBException;
+import jakarta.xml.bind.Unmarshaller;
 
 import org.junit.After;
 import org.junit.Before;
@@ -305,6 +305,20 @@ public class JpaJaxbPeerReviewAdapterTest extends MockSourceNameCache {
 
         // no user obo
         assertNull(peerReview.getSource().getAssertionOriginOrcid());
+    }
+
+    @Test
+    public void fromPeerReviewEntityToPeerReviewDoesNotCreateEmptyOptionalSubjectFields() throws IllegalAccessException {
+        PeerReviewEntity entity = getPeerReviewEntity();
+        entity.setSubjectContainerName(null);
+        entity.setSubjectName(null);
+        entity.setSubjectTranslatedName(null);
+        entity.setSubjectTranslatedNameLanguageCode(null);
+
+        PeerReview peerReview = jpaJaxbPeerReviewAdapter.toPeerReview(entity);
+
+        assertNull(peerReview.getSubjectContainerName());
+        assertNull(peerReview.getSubjectName());
     }
 
     @Test

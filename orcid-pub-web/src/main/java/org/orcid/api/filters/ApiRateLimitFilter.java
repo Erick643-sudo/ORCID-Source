@@ -4,13 +4,13 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDate;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
-import javax.annotation.Resource;
-import javax.servlet.FilterChain;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.persistence.NoResultException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.apache.commons.lang.LocaleUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -22,12 +22,12 @@ import org.orcid.core.manager.TemplateManager;
 import org.orcid.core.manager.impl.OrcidUrlManager;
 import org.orcid.core.manager.v3.EmailManager;
 import org.orcid.core.manager.v3.RecordNameManager;
-import org.orcid.core.oauth.service.OrcidTokenStore;
+import org.orcid.persistence.dao.OrcidOauth2TokenDetailDao;
 import org.orcid.persistence.dao.ProfileDao;
 import org.orcid.persistence.jpa.entities.ClientDetailsEntity;
+import org.orcid.persistence.jpa.entities.OrcidOauth2TokenDetail;
 import org.orcid.persistence.jpa.entities.ProfileEntity;
 import org.orcid.utils.email.MailGunManager;
-import org.orcid.utils.panoply.PanoplyPapiDailyRateExceededItem;
 import org.orcid.utils.panoply.PanoplyRedshiftClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +39,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import inet.ipaddr.IPAddress;
+import inet.ipaddr.IPAddressString;
+
 import org.orcid.core.togglz.Features;
 import org.orcid.jaxb.model.common.AvailableLocales;
 
@@ -48,7 +51,7 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
 
     @Autowired
     private ClientDetailsEntityCacheManager clientDetailsEntityCacheManager;
-    
+
     @Autowired
     private ProfileDao profileDao;
 
@@ -68,13 +71,10 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     private EmailManager emailManager;
 
     @Resource
-    private PanoplyRedshiftClient panoplyClient;
-
-    @Resource
     private PapiRateLimitRedisClient papiRedisClient;
 
-    @Autowired
-    private OrcidTokenStore orcidTokenStore;
+    @Resource(name="orcidOauth2TokenDetailDaoReadOnly")
+    private OrcidOauth2TokenDetailDao orcidOauth2TokenDetailDaoReadOnly;
 
     @Autowired
     private MessageSource messageSource;
@@ -88,9 +88,6 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     @Value("${org.orcid.papi.rate.limit.enabled:false}")
     private boolean enableRateLimiting;
 
-    @Value("${org.orcid.persistence.panoply.papiExceededRate.production:false}")
-    private boolean enablePanoplyPapiExceededRateInProduction;
-
     // :192.168.65.1 127.0.0.1
     @Value("${org.orcid.papi.rate.limit.ip.whiteSpaceSeparatedWhiteList:192.168.65.1 127.0.0.1}")
     private String papiWhiteSpaceSeparatedWhiteList;
@@ -101,9 +98,13 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     @Value("${org.orcid.papi.rate.limit.referrer.whiteSpaceSeparatedWhiteList}")
     private String papiReferrerWhiteSpaceSeparatedWhiteList;
 
+    @Value("${org.orcid.papi.rate.limit.cidrRange.whiteSpaceSeparatedWhiteList:10.0.0.0/8}")
+    private String papiCidrRangeWhiteSpaceSeparatedWhiteList;
+
     private List<String> papiIpWhiteList;
     private List<String> papiClientIdWhiteList;
     private List<String> papiReferrerWhiteList;
+    private List<String> papiCidrRangeWhiteList;
 
     private static final String TOO_MANY_REQUESTS_MSG = "Too Many Requests. You have exceeded the daily quota for anonymous usage of this API. \n"
             + "You can increase your daily quota by registering for and using Public API client credentials "
@@ -125,12 +126,15 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
                 : null;
         papiReferrerWhiteList = StringUtils.isNotBlank(papiReferrerWhiteSpaceSeparatedWhiteList) ? Arrays.asList(papiReferrerWhiteSpaceSeparatedWhiteList.split("\\s"))
                 : null;
+        papiCidrRangeWhiteList = StringUtils.isNotBlank(papiCidrRangeWhiteSpaceSeparatedWhiteList) ? Arrays.asList(papiCidrRangeWhiteSpaceSeparatedWhiteList.split("\\s"))
+                : null;
     }
 
     @Override
     public void doFilterInternal(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, FilterChain filterChain)
             throws ServletException, IOException {
         LOG.warn("ApiRateLimitFilter starts, rate limit is : " + enableRateLimiting);
+        boolean filterChainRequired = true;
 
         if (enableRateLimiting && !isReferrerWhiteListed(httpServletRequest.getHeader(HttpHeaders.REFERER))) {
             String tokenValue = null;
@@ -139,39 +143,47 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
             }
             String ipAddress = getClientIpAddress(httpServletRequest);
 
-            String clientId = null;
-            if (tokenValue != null) {
+            if (!isIPInCidrWhiteListRange(ipAddress)) {
+                String clientId = null;
+                if (tokenValue != null) {
+                    try {
+                        OrcidOauth2TokenDetail token = orcidOauth2TokenDetailDaoReadOnly.findByTokenValue(tokenValue);
+                        if(token != null) {
+                            clientId = token.getClientDetailsId();
+                        }
+                    } catch (NoResultException ex) {
+                        LOG.debug("No client found for token value, treating request as anonymous client");
+                    } catch (Exception ex) {
+                        LOG.error("Exception when trying to get the client id from token value, ignoring and treating as anonymous client", ex);
+                    }
+                }
+                boolean isAnonymous = (clientId == null);
+                LocalDate today = LocalDate.now();
                 try {
-                    clientId = orcidTokenStore.readClientId(tokenValue);
-                } catch (Exception ex) {
-                    LOG.error("Exception when trying to get the client id from token value, ignoring and treating as anonymous client", ex);
-                }
-            }
-            boolean isAnonymous = (clientId == null);
-            LocalDate today = LocalDate.now();
-            try {
-                if (isAnonymous) {
-                    if (!isWhiteListed(ipAddress)) {
-                        LOG.info("ApiRateLimitFilter anonymous request for ip: " + ipAddress);
-                        this.rateLimitAnonymousRequest(ipAddress, today, httpServletResponse);
-                    }
+                    if (isAnonymous) {
+                        if (!isWhiteListed(ipAddress)) {
+                            LOG.info("ApiRateLimitFilter anonymous request for ip: " + ipAddress);
+                            filterChainRequired = this.rateLimitAnonymousRequest(ipAddress, today, httpServletResponse);
+                        }
 
-                } else {
-                    if (!isClientIdWhiteListed(clientId)) {
-                        //Get the locale for the clientID
-                        LOG.info("ApiRateLimitFilter client request with clientId: " + clientId);
-                        this.rateLimitClientRequest(clientId, today);
+                    } else {
+                        if (!isClientIdWhiteListed(clientId)) {
+                            // Get the locale for the clientID
+                            LOG.info("ApiRateLimitFilter client request with clientId: " + clientId);
+                            this.rateLimitClientRequest(clientId, today);
+                        }
                     }
+                } catch (Exception ex) {
+                    LOG.error("Papi Limiting Filter unexpected error, ignore and chain request.", ex);
                 }
-            } catch (Exception ex) {
-                LOG.error("Papi Limiting Filter unexpected error, ignore and chain request.", ex);
             }
         }
-
-        filterChain.doFilter(httpServletRequest, httpServletResponse);
+        if (filterChainRequired) {
+            filterChain.doFilter(httpServletRequest, httpServletResponse);
+        }
     }
 
-    private void rateLimitAnonymousRequest(String ipAddress, LocalDate today, HttpServletResponse httpServletResponse) throws IOException, JSONException {
+    private boolean rateLimitAnonymousRequest(String ipAddress, LocalDate today, HttpServletResponse httpServletResponse) throws IOException, JSONException {
         JSONObject dailyLimitsObj = papiRedisClient.getTodayDailyLimitsForClient(ipAddress);
         long limitValue = 0l;
         if (dailyLimitsObj != null) {
@@ -193,9 +205,10 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
                     writer.write(TOO_MANY_REQUESTS_MSG);
                     writer.flush();
                 }
-                return;
+                return false;
             }
         }
+        return true;
     }
 
     private void rateLimitClientRequest(String clientId, LocalDate today) throws JSONException {
@@ -221,7 +234,8 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     }
 
     private Map<String, Object> createTemplateParams(String clientId, String clientName, String emailName, String orcidId, Locale locale) {
-        String subject = messageSource.getMessage("papi.rate.limit.subject", new String[] { orcidId }, locale);;
+        String subject = messageSource.getMessage("papi.rate.limit.subject", new String[] { orcidId }, locale);
+        ;
         Map<String, Object> templateParams = new HashMap<String, Object>();
         templateParams.put("messages", messageSource);
         templateParams.put("messageArgs", new Object[0]);
@@ -241,24 +255,17 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         ProfileEntity memberProfile = profileDao.find(memberId);
         String emailName = recordNameManager.deriveEmailFriendlyName(memberId);
         Locale locale = getUserLocaleFromProfileEntity(memberProfile);
-        
-        Map<String, Object> templateParams = this.createTemplateParams(clientId, clientDetailsEntity.getClientName(), emailName, memberId, getUserLocaleFromProfileEntity(memberProfile));
+
+        Map<String, Object> templateParams = this.createTemplateParams(clientId, clientDetailsEntity.getClientName(), emailName, memberId,
+                getUserLocaleFromProfileEntity(memberProfile));
         // Generate body from template
         String body = templateManager.processTemplate("papi_rate_limit_email.ftl", templateParams, locale);
         // Generate html from template
-        String html = templateManager.processTemplate("papi_rate_limit_email_html.ftl", templateParams, locale );
+        String html = templateManager.processTemplate("papi_rate_limit_email_html.ftl", templateParams, locale);
         String email = emailManager.findPrimaryEmail(memberId).getEmail();
         LOG.info("from address={}", FROM_ADDRESS);
         LOG.info("text email={}", body);
         LOG.info("html email={}", html);
-        if (enablePanoplyPapiExceededRateInProduction) {
-            PanoplyPapiDailyRateExceededItem item = new PanoplyPapiDailyRateExceededItem();
-            item.setClientId(clientId);
-            item.setOrcid(memberId);
-            item.setEmail(email);
-            item.setRequestDate(requestDate);
-            setPapiRateExceededItemInPanoply(item);
-        }
 
         String subject = templateParams.containsKey("subject") ? ((String) templateParams.get("subject")) : SUBJECT;
         // Send the email
@@ -268,22 +275,6 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         }
     }
 
-    private void setPapiRateExceededItemInPanoply(PanoplyPapiDailyRateExceededItem item) {
-        // Store the rate exceeded item in panoply Db without blocking
-        CompletableFuture.supplyAsync(() -> {
-            try {
-                panoplyClient.addPanoplyPapiDailyRateExceeded(item);
-                return true;
-            } catch (Exception e) {
-                LOG.error("Cannot store the rateExceededItem to panoply ", e);
-                return false;
-            }
-        }).thenAccept(result -> {
-            if (!result) {
-                LOG.error("Async call to panoply for : " + item.toString() + " Stored: " + result);
-            }
-        });
-    }
 
     // gets actual client IP address, using the headers that the proxy server
     // adds
@@ -315,17 +306,42 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         else
             return (papiReferrerWhiteList != null) ? papiReferrerWhiteList.contains(referrer) : false;
     }
-    
+
+    private boolean isIPInCidrWhiteListRange(String ipAddress) {
+        for (String cidr : papiCidrRangeWhiteList) {
+            if (isIpInCidrRange(ipAddress, cidr)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private Locale getUserLocaleFromProfileEntity(ProfileEntity profile) {
         String locale = profile.getLocale();
         try {
             if (locale != null) {
                 return LocaleUtils.toLocale(AvailableLocales.valueOf(locale).value());
             }
-        }
-        catch(Exception ex) {
+        } catch (Exception ex) {
             LOG.error("Locale is not supported in the available locales, defaulting to en", ex);
         }
         return LocaleUtils.toLocale("en");
-    } 
+    }
+
+    private boolean isIpInCidrRange(String ipAddress, String cidr) {
+        LOG.info("ip Address: " + ipAddress + " cidr: " + cidr);
+        IPAddressString ipStr = new IPAddressString(ipAddress);
+        IPAddressString cidrStr = new IPAddressString(cidr);
+
+        IPAddress ip = ipStr.getAddress();
+        IPAddress subnet = cidrStr.getAddress();
+
+        if (ip == null || subnet == null) {
+            // Invalid IP or CIDR notation
+            LOG.info("IP or cidr null returning false");
+            return false;
+        }
+        LOG.info("ip Address: " + ipAddress + " cidr: " + cidr + " is in ip range? " + subnet.contains(ip));
+        return subnet.contains(ip);
+    }
 }

@@ -14,10 +14,10 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.orcid.core.locale.LocaleManager;
 import org.orcid.core.manager.IdentifierTypeManager;
@@ -46,6 +46,7 @@ import org.orcid.pojo.ThirdPartyRedirect;
 import org.orcid.pojo.ajaxForm.ExternalIdentifierForm;
 import org.orcid.pojo.ajaxForm.ExternalIdentifiersForm;
 import org.orcid.pojo.ajaxForm.ImportWizzardClientForm;
+import org.orcid.pojo.ajaxForm.SearchAndLinkWizardFormSummary;
 import org.orcid.pojo.ajaxForm.KeywordForm;
 import org.orcid.pojo.ajaxForm.KeywordsForm;
 import org.orcid.pojo.ajaxForm.OtherNameForm;
@@ -62,7 +63,6 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.ModelAndView;
-//import org.springframework.web.servlet.mvc.multiaction.NoSuchRequestHandlingMethodException;
 
 /**
  * @author Will Simpson
@@ -103,6 +103,11 @@ public class WorkspaceController extends BaseWorkspaceController {
     @RequestMapping(value = { "/workspace/retrieve-work-import-wizards.json" }, method = RequestMethod.GET)
     public @ResponseBody List<ImportWizzardClientForm> retrieveWorkImportWizards() {
         return thirdPartyLinkManager.findOrcidClientsWithPredefinedOauthScopeWorksImport(localeManager.getLocale());        
+    }
+
+    @RequestMapping(value = { "/workspace/retrieve-works-search-and-link-wizard.json" }, method = RequestMethod.GET)
+    public @ResponseBody List<SearchAndLinkWizardFormSummary> retrieveSearchAndLinkWizard() {
+        return thirdPartyLinkManager.findSearchAndLinkWizardClients(getCurrentUserOrcid());
     }
     
     @RequestMapping(value = { "/workspace/retrieve-funding-import-wizards.json" }, method = RequestMethod.GET)
@@ -187,16 +192,17 @@ public class WorkspaceController extends BaseWorkspaceController {
     }
 
     @RequestMapping(value = { "/my-orcid3", "/my-orcid", "/workspace" }, method = RequestMethod.GET)
-    public ModelAndView viewWorkspace3(HttpServletRequest request, HttpServletResponse response, @RequestParam(value = "page", defaultValue = "1") int pageNo, @RequestParam(value = "maxResults", defaultValue = "200") int maxResults, @RequestParam(value = "orcid", defaultValue = "") String orcid) throws ServletException, IOException {
-       
-        if (!orcid.equals(getCurrentUserOrcid())){
+    public ModelAndView viewWorkspace3(HttpServletRequest request, HttpServletResponse response, @RequestParam(value = "orcid", defaultValue = "") String orcid) throws IOException {
+        String currentUserOrcid = getCurrentUserOrcid();
+        if(currentUserOrcid == null) {
+            return new ModelAndView("redirect:" + calculateRedirectUrl("/login"));
+        } else if (!orcid.equals(currentUserOrcid)){
             String redirectUrl = request.getRequestURL().toString();
             redirectUrl += "?orcid="+getCurrentUserOrcid();
             if (request.getQueryString() != null && orcid.equals("")){
                 redirectUrl += "&"+request.getQueryString();
             }
             response.sendRedirect(redirectUrl);
-            
         }
 
         return new ModelAndView("workspace_v3");

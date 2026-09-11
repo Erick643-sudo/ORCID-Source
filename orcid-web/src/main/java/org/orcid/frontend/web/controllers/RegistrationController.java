@@ -14,9 +14,9 @@ import java.util.Random;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.lang.StringUtils;
@@ -25,22 +25,17 @@ import org.orcid.core.common.manager.EventManager;
 import org.orcid.core.constants.EmailConstants;
 import org.orcid.core.constants.OrcidOauth2Constants;
 import org.orcid.core.manager.EncryptionManager;
-import org.orcid.core.manager.ProfileEntityCacheManager;
 import org.orcid.core.manager.RegistrationManager;
-import org.orcid.core.manager.v3.OrcidSearchManager;
 import org.orcid.core.manager.v3.ProfileHistoryEventManager;
-import org.orcid.core.manager.v3.read_only.AffiliationsManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.EmailManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.RecordNameManagerReadOnly;
 import org.orcid.core.profile.history.ProfileHistoryEventType;
-import org.orcid.core.security.OrcidUserDetailsService;
 import org.orcid.core.togglz.Features;
 import org.orcid.core.utils.OrcidRequestUtil;
 import org.orcid.frontend.email.RecordEmailSender;
 import org.orcid.frontend.spring.ShibbolethAjaxAuthenticationSuccessHandler;
 import org.orcid.frontend.spring.SocialAjaxAuthenticationSuccessHandler;
 import org.orcid.frontend.spring.web.social.config.SocialSignInUtils;
-import org.orcid.frontend.web.controllers.helper.OauthHelper;
 import org.orcid.frontend.web.util.RecaptchaVerifier;
 import org.orcid.jaxb.model.common.AvailableLocales;
 import org.orcid.jaxb.model.message.CreationMethod;
@@ -62,8 +57,10 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetails;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.savedrequest.SavedRequest;
 import org.springframework.stereotype.Controller;
@@ -73,7 +70,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.ModelAndView;
-import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.servlet.support.RequestContextUtils;
 
 /**
@@ -101,9 +97,6 @@ public class RegistrationController extends BaseController {
     @Resource
     private AuthenticationManager authenticationManager;
 
-    @Resource(name = "orcidSearchManagerV3")
-    private OrcidSearchManager orcidSearchManager;
-
     @Resource
     private EncryptionManager encryptionManager;
 
@@ -119,20 +112,11 @@ public class RegistrationController extends BaseController {
     @Resource
     private ShibbolethAjaxAuthenticationSuccessHandler ajaxAuthenticationSuccessHandlerShibboleth;
 
-    @Resource(name = "affiliationsManagerReadOnlyV3")
-    private AffiliationsManagerReadOnly affiliationsManagerReadOnly;
-
     @Resource(name = "emailManagerReadOnlyV3")
     private EmailManagerReadOnly emailManagerReadOnly;
 
     @Resource(name = "profileHistoryEventManagerV3")
     private ProfileHistoryEventManager profileHistoryEventManager;
-
-    @Resource
-    private ProfileEntityCacheManager profileEntityCacheManager;
-
-    @Resource
-    private OrcidUserDetailsService orcidUserDetailsService;
 
     @Resource(name = "recordNameManagerReadOnlyV3")
     private RecordNameManagerReadOnly recordNameManagerReadOnly;
@@ -172,21 +156,6 @@ public class RegistrationController extends BaseController {
         }
 
         setError(reg.getTermsOfUse(), "validations.acceptTermsAndConditions");
-
-        RequestInfoForm requestInfoForm = (RequestInfoForm) request.getSession().getAttribute(OauthHelper.REQUEST_INFO_FORM);
-        if (requestInfoForm != null) {
-            if (!PojoUtil.isEmpty(requestInfoForm.getUserEmail())) {
-                reg.getEmail().setValue(requestInfoForm.getUserEmail());
-            }
-
-            if (!PojoUtil.isEmpty(requestInfoForm.getUserGivenNames())) {
-                reg.getGivenNames().setValue(requestInfoForm.getUserGivenNames());
-            }
-
-            if (!PojoUtil.isEmpty(requestInfoForm.getUserFamilyNames())) {
-                reg.getFamilyNames().setValue(requestInfoForm.getUserFamilyNames());
-            }
-        }
 
         long numVal = generateRandomNumForValidation();
         reg.setValNumServer(numVal);
@@ -312,7 +281,7 @@ public class RegistrationController extends BaseController {
         String redirectUrl = calculateRedirectUrl(request, response, true);
         if (request.getQueryString() == null || request.getQueryString().isEmpty()) {
             redirectUrl = calculateRedirectUrl(request, response, true, true);
-        } 
+        }
         r.setUrl(redirectUrl);
         return r;
     }
@@ -492,11 +461,9 @@ public class RegistrationController extends BaseController {
     }
 
     @RequestMapping(value = "/verify-email/{encryptedEmail}", method = RequestMethod.GET)
-    public ModelAndView verifyEmail(HttpServletRequest request, HttpServletResponse response, @PathVariable("encryptedEmail") String encryptedEmail,
-            RedirectAttributes redirectAttributes) throws UnsupportedEncodingException {
+    public ModelAndView verifyEmail(HttpServletRequest request, HttpServletResponse response, @PathVariable("encryptedEmail") String encryptedEmail) throws UnsupportedEncodingException {
         if (PojoUtil.isEmpty(encryptedEmail) || !Base64.isBase64(encryptedEmail)) {
             LOGGER.error("Error decypting verify email from the verify email link: {} ", encryptedEmail);
-            redirectAttributes.addFlashAttribute("invalidVerifyUrl", true);
             return new ModelAndView("redirect:" + calculateRedirectUrl("/signin"));
         }
         String redirect = "redirect:" + calculateRedirectUrl("/signin");
@@ -514,18 +481,15 @@ public class RegistrationController extends BaseController {
                 boolean verified = emailManager.verifyEmail(orcid, decryptedEmail);
                 if (verified) {
                     profileEntityManager.updateLocale(orcid, AvailableLocales.fromValue(RequestContextUtils.getLocale(request).toString()));
-                    redirectAttributes.addFlashAttribute("emailVerified", true);
                     sb.append("emailVerified=true");
 
                     if (!emailManagerReadOnly.isPrimaryEmail(orcid, decryptedEmail)) {
                         if (!emailManagerReadOnly.isPrimaryEmailVerified(orcid)) {
-                            redirectAttributes.addFlashAttribute("primaryEmailUnverified", true);
                             sb.append("&");
                             sb.append("primaryEmailUnverified=true");
                         }
                     }
                 } else {
-                    redirectAttributes.addFlashAttribute("emailVerified", false);
                     sb.append("emailVerified=false");
                 }
 
@@ -537,17 +501,16 @@ public class RegistrationController extends BaseController {
             }
         } catch (EncryptionOperationNotPossibleException eonpe) {
             LOGGER.warn("Error decypting verify email from the verify email link");
-            redirectAttributes.addFlashAttribute("invalidVerifyUrl", true);
             sb.append("invalidVerifyUrl=true");
             redirect = "redirect:" + calculateRedirectUrl("/signin?" + sb.toString());
             SecurityContextHolder.clearContext();
-        }       
+        }
 
         return new ModelAndView(redirect);
-    }    
+    }
 
     private void createMinimalRegistrationAndLogUserIn(HttpServletRequest request, HttpServletResponse response, Registration registration,
-            boolean usedCaptchaVerification, Locale locale, String ip) {
+                                                       boolean usedCaptchaVerification, Locale locale, String ip) {
         String unencryptedPassword = registration.getPassword().getValue();
         String orcidId = createMinimalRegistration(request, registration, usedCaptchaVerification, locale, ip);
         logUserIn(request, response, orcidId, unencryptedPassword);
@@ -562,11 +525,16 @@ public class RegistrationController extends BaseController {
             token = new UsernamePasswordAuthenticationToken(orcidId, password);
             token.setDetails(new WebAuthenticationDetails(request));
             Authentication authentication = authenticationManager.authenticate(token);
-            SecurityContextHolder.getContext().setAuthentication(authentication);            
+            SecurityContext context = SecurityContextHolder.createEmptyContext();
+            context.setAuthentication(authentication);
+            SecurityContextHolder.setContext(context);
+            // Spring Security 6: SecurityContextHolderFilter no longer auto-saves the context
+            // to the session; we must persist it explicitly so the next request is authenticated.
+            new HttpSessionSecurityContextRepository().saveContext(context, request, response);
         } catch (AuthenticationException e) {
             // this should never happen
-            SecurityContextHolder.getContext().setAuthentication(null);
-            LOGGER.warn("User {0} should have been logged-in, but we unable to due to a problem", e, (token != null ? token.getPrincipal() : "empty principle"));
+            SecurityContextHolder.clearContext();
+            LOGGER.warn("User '" + orcidId +  "' should have been logged-in, but we unable to due to a problem", e);
         }
     }
 
@@ -588,7 +556,7 @@ public class RegistrationController extends BaseController {
     private void createAffiliation(Registration registration, String newUserOrcid) {
         registrationManager.createAffiliation(registration, newUserOrcid);
     }
-    
+
     private void processProfileHistoryEvents(Registration registration, String newUserOrcid) {
         // t&cs must be accepted but check just in case!
         if (registration.getTermsOfUse().getValue()) {
@@ -611,8 +579,8 @@ public class RegistrationController extends BaseController {
                         .toFormatter(),
                 new DateTimeFormatterBuilder().appendPattern("yyyyMM").parseDefaulting(ChronoField.DAY_OF_MONTH, 1).toFormatter(),
                 new DateTimeFormatterBuilder().appendPattern("yyyyMMdd").parseStrict().toFormatter() };
-        String dateString = date.getYear();        
-        
+        String dateString = date.getYear();
+
         // If year is blank and month or day is not, then it is invalid
         if (StringUtils.isBlank(date.getYear())) {
             if (!StringUtils.isBlank(date.getMonth()) || !StringUtils.isBlank(date.getDay())) {
@@ -637,10 +605,10 @@ public class RegistrationController extends BaseController {
                 try {
                     LocalDate.parse(dateString, formatter);
                     return true;
-                } catch (DateTimeParseException e) {                    
+                } catch (DateTimeParseException e) {
                 }
             }
-        } 
+        }
         return false;
     }
 

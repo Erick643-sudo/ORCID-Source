@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.orcid.core.adapter.v3.JpaJaxbDistinctionAdapter;
 import org.orcid.core.adapter.v3.JpaJaxbEducationAdapter;
@@ -464,5 +464,22 @@ public class AffiliationsManagerReadOnlyImpl extends ManagerReadOnlyBaseImpl imp
             return false;
         }
         return orgAffiliationRelationDao.hasPublicAffiliations(orcid);
+    }
+    
+    @Override
+    public Long getFeaturedFlag(String orcid) {
+        List<OrgAffiliationRelationEntity> entities = orgAffiliationRelationEntityCacheManager.getAffiliationEntities(orcid);
+        if (entities == null) {
+            return null;
+        }
+        for (OrgAffiliationRelationEntity entity : entities) {
+            if (Boolean.TRUE.equals(entity.getFeatured())) {
+                Long id = entity.getId();
+                if (id != null) {
+                    return id;
+                }
+            }
+        }
+        return null;
     }
 }

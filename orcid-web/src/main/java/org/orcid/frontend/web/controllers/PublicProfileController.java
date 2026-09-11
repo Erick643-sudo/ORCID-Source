@@ -10,9 +10,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.apache.commons.lang3.StringUtils;
 import org.orcid.core.exception.DeactivatedException;
@@ -33,7 +33,6 @@ import org.orcid.core.manager.v3.read_only.ProfileEntityManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.ProfileFundingManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.ResearchResourceManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.WorkManagerReadOnly;
-import org.orcid.core.oauth.OrcidOauth2TokenDetailService;
 import org.orcid.core.utils.v3.ContributorUtils;
 import org.orcid.core.utils.v3.SourceUtils;
 import org.orcid.core.utils.v3.activities.FundingComparators;
@@ -127,9 +126,6 @@ public class PublicProfileController extends BaseWorkspaceController {
     @Resource
     private OrgDisambiguatedManager orgDisambiguatedManager;
 
-    @Resource
-    private OrcidOauth2TokenDetailService orcidOauth2TokenService;
-
     @Resource(name = "sourceUtilsV3")
     private SourceUtils sourceUtils;
 
@@ -154,6 +150,9 @@ public class PublicProfileController extends BaseWorkspaceController {
     @Resource(name = "profileEntityManagerReadOnlyV3")
     private ProfileEntityManagerReadOnly profileEntityManagerReadOnly;
 
+    @Value("${org.orcid.frontend.web.controllers.works.page.max.items:100}")
+    private int maxWorksPerPageForUI;
+
     public static int ORCID_HASH_LENGTH = 8;
     private static final String PAGE_SIZE_DEFAULT = "50";
 
@@ -177,8 +176,7 @@ public class PublicProfileController extends BaseWorkspaceController {
         try {
             profile = profileEntityCacheManager.retrieve(orcid);
         } catch (Exception e) {
-            response.setStatus(HttpStatus.NOT_FOUND.value());
-            return new ModelAndView("error-404");
+            return new ModelAndView("redirect:" + calculateRedirectUrl("/404"));
         }
 
         Long lastModifiedTime = getLastModifiedTime(orcid);
@@ -220,12 +218,11 @@ public class PublicProfileController extends BaseWorkspaceController {
         }
 
         if (!profile.isReviewed()) {
-            if (!orcidOauth2TokenService.hasToken(orcid, lastModifiedTime)) {
+            if (!profileEntityManagerReadOnly.hasToken(orcid, lastModifiedTime)) {
                 mav.addObject("noIndex", true);
             }
         }
-        PublicRecordPersonDetails publicRecordPersonDetails = new PublicRecordPersonDetails();
-        publicRecordPersonDetails = getPersonDetails(orcid, true);
+        PublicRecordPersonDetails publicRecordPersonDetails = getPersonDetails(orcid, true);
 
         String orcidDescription1 = "ORCID record for ";
         String orcidDescription2 = "ORCID provides an identifier for individuals to use with their name as they engage in research, scholarship, and innovation activities.";
@@ -276,7 +273,7 @@ public class PublicProfileController extends BaseWorkspaceController {
         // False if it is not reviewed and doesn't have any integration
         if(!profile.isReviewed()) {
             String userOrcid = profile.getId();
-            if (!orcidOauth2TokenService.hasToken(userOrcid, getLastModifiedTime(userOrcid))) {
+            if (!profileEntityManagerReadOnly.hasToken(userOrcid, getLastModifiedTime(userOrcid))) {
                 // If the user doesn't have any token, check if it was created by member, if so, 
                 // verify if that member pushed any work of affiliation on creation time
                 SourceEntity source = profile.getSource();
@@ -446,6 +443,10 @@ public class PublicProfileController extends BaseWorkspaceController {
     @RequestMapping(value = "/{orcid:(?:\\d{4}-){3,}\\d{3}[\\dX]}/worksPage.json", method = RequestMethod.GET)
     public @ResponseBody Page<WorkGroup> getWorkGroupsJson(@PathVariable("orcid") String orcid, @RequestParam(value="pageSize", defaultValue = PAGE_SIZE_DEFAULT) int pageSize, @RequestParam("offset") int offset, @RequestParam("sort") String sort,
             @RequestParam("sortAsc") boolean sortAsc) {
+        if(pageSize > maxWorksPerPageForUI) {
+            // If the page size is greater than the max works per page for UI, return an empty page.
+            return new Page<WorkGroup>();
+        }
         try {
             orcidSecurityManager.checkProfile(orcid);
         } catch (Exception e) {
@@ -457,12 +458,26 @@ public class PublicProfileController extends BaseWorkspaceController {
     @RequestMapping(value = "/{orcid:(?:\\d{4}-){3,}\\d{3}[\\dX]}/worksExtendedPage.json", method = RequestMethod.GET)
     public @ResponseBody Page<WorkGroup> getWorksExtendedGroupsJson(@PathVariable("orcid") String orcid, @RequestParam(value="pageSize", defaultValue = PAGE_SIZE_DEFAULT) int pageSize, @RequestParam("offset") int offset, @RequestParam("sort") String sort,
                                                            @RequestParam("sortAsc") boolean sortAsc) {
+        if(pageSize > maxWorksPerPageForUI) {
+            // If the page size is greater than the max works per page for UI, return an empty page.
+            return new Page<WorkGroup>();
+        }
         try {
             orcidSecurityManager.checkProfile(orcid);
         } catch (Exception e) {
             return new Page<WorkGroup>();
         }
         return worksPaginator.getWorksExtendedPage(orcid, offset, pageSize, true, sort, sortAsc);
+    }
+
+    @RequestMapping(value = "/{orcid:(?:\\d{4}-){3,}\\d{3}[\\dX]}/featuredWorks.json", method = RequestMethod.GET)
+    public @ResponseBody List<WorkForm> getFeaturedWorksJson(@PathVariable("orcid") String orcid) {
+        try {
+            orcidSecurityManager.checkProfile(orcid);
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+        return workManagerReadOnly.getFeaturedWorks(orcid);
     }
 
     @RequestMapping(value = "/{orcid:(?:\\d{4}-){3,}\\d{3}[\\dX]}/researchResourcePage.json", method = RequestMethod.GET)
@@ -507,7 +522,7 @@ public class PublicProfileController extends BaseWorkspaceController {
             return null;
          
         WorkExtended workExtended = workManagerReadOnly.getWorkExtended(orcid, workId);
-        WorkForm work = WorkForm.valueOf(workExtended, maxContributorsForUI);
+        WorkForm work = WorkForm.getExtendedWorkForm(workExtended, maxContributorsForUI);
         Work workObj = workExtended;        
 
         if (work != null && validateVisibility(workObj.getVisibility())) {
@@ -527,10 +542,6 @@ public class PublicProfileController extends BaseWorkspaceController {
                 String languageName = languages.get(work.getTranslatedTitle().getLanguageCode());
                 work.getTranslatedTitle().setLanguageName(languageName);
             }
-
-            if (work.getContributorsGroupedByOrcid() != null) {
-                contributorUtils.filterContributorsGroupedByOrcidPrivateData(work.getContributorsGroupedByOrcid(), maxContributorsForUI);
-            }            
 
             return new ResponseEntity<>(work, HttpStatus.OK);
         }
@@ -711,6 +722,7 @@ public class PublicProfileController extends BaseWorkspaceController {
             return result;
         }
         Map<AffiliationType, List<AffiliationGroup<AffiliationSummary>>> affiliationsMap = affiliationsManagerReadOnly.getGroupedAffiliations(orcid, true);
+        Long featuredId = affiliationsManagerReadOnly.getFeaturedFlag(orcid);
         for (AffiliationType type : AffiliationType.values()) {
             if (affiliationsMap.containsKey(type)) {
                 List<AffiliationGroup<AffiliationSummary>> elementsList = affiliationsMap.get(type);
@@ -724,6 +736,16 @@ public class PublicProfileController extends BaseWorkspaceController {
                             // Set country name
                             defaultAffiliation.setCountryForDisplay(groupForm.getDefaultAffiliation().getCountry().getValue());
                         }
+                        if (defaultAffiliation.getPutCode() != null && defaultAffiliation.getPutCode().getValue() != null) {
+                            try {
+                                Long pc = Long.valueOf(defaultAffiliation.getPutCode().getValue());
+                                if (featuredId != null && featuredId.equals(pc)) {
+                                    defaultAffiliation.setFeatured(Boolean.TRUE);
+                                }
+                            } catch (NumberFormatException nfe) {
+                                // ignore invalid putCode
+                            }
+                        }
                     }
 
                     // Fill country for each affiliation
@@ -731,6 +753,16 @@ public class PublicProfileController extends BaseWorkspaceController {
                         if (!PojoUtil.isEmpty(aff.getCountry())) {
                             // Set country name
                             aff.setCountryForDisplay(aff.getCountry().getValue());
+                        }
+                        if (aff.getPutCode() != null && aff.getPutCode().getValue() != null) {
+                            try {
+                                Long pc = Long.valueOf(aff.getPutCode().getValue());
+                                if (featuredId != null && featuredId.equals(pc)) {
+                                    aff.setFeatured(Boolean.TRUE);
+                                }
+                            } catch (NumberFormatException nfe) {
+                                // ignore invalid putCode
+                            }
                         }
                     }
 

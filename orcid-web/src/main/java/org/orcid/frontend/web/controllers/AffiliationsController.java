@@ -1,29 +1,14 @@
 package org.orcid.frontend.web.controllers;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.IntStream;
-
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import org.orcid.api.common.util.v3.ActivityUtils;
 import org.orcid.core.manager.OrgDisambiguatedManager;
 import org.orcid.core.manager.ProfileEntityCacheManager;
 import org.orcid.core.manager.v3.AffiliationsManager;
 import org.orcid.core.manager.v3.read_only.AffiliationsManagerReadOnly;
 import org.orcid.core.security.visibility.OrcidVisibilityDefaults;
-import org.orcid.jaxb.model.v3.release.record.Affiliation;
-import org.orcid.jaxb.model.v3.release.record.AffiliationType;
-import org.orcid.jaxb.model.v3.release.record.Distinction;
-import org.orcid.jaxb.model.v3.release.record.Education;
-import org.orcid.jaxb.model.v3.release.record.Employment;
-import org.orcid.jaxb.model.v3.release.record.InvitedPosition;
-import org.orcid.jaxb.model.v3.release.record.Membership;
-import org.orcid.jaxb.model.v3.release.record.Qualification;
-import org.orcid.jaxb.model.v3.release.record.Service;
+import org.orcid.jaxb.model.v3.release.record.*;
 import org.orcid.jaxb.model.v3.release.record.summary.AffiliationGroup;
 import org.orcid.jaxb.model.v3.release.record.summary.AffiliationSummary;
 import org.orcid.jaxb.model.v3.release.record.summary.EmploymentSummary;
@@ -31,21 +16,18 @@ import org.orcid.jaxb.model.v3.release.record.summary.Employments;
 import org.orcid.persistence.jpa.entities.CountryIsoEntity;
 import org.orcid.persistence.jpa.entities.ProfileEntity;
 import org.orcid.pojo.OrgDisambiguated;
-import org.orcid.pojo.ajaxForm.AffiliationForm;
-import org.orcid.pojo.ajaxForm.AffiliationGroupContainer;
-import org.orcid.pojo.ajaxForm.AffiliationGroupForm;
-import org.orcid.pojo.ajaxForm.Date;
-import org.orcid.pojo.ajaxForm.Errors;
-import org.orcid.pojo.ajaxForm.PojoUtil;
-import org.orcid.pojo.ajaxForm.Text;
-import org.orcid.pojo.ajaxForm.Visibility;
+import org.orcid.pojo.ajaxForm.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.*;
+
+import java.lang.Deprecated;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.IntStream;
 
 /**
  * @author rcpeters
@@ -201,14 +183,15 @@ public class AffiliationsController extends BaseWorkspaceController {
     public @ResponseBody AffiliationForm postAffiliation(HttpServletRequest request, @RequestBody AffiliationForm affiliationForm) throws Exception {
         // Validate
         affiliationNameValidate(affiliationForm);
-        cityValidate(affiliationForm);
-        regionValidate(affiliationForm);
-        countryValidate(affiliationForm);
+        if(!AffiliationForm.isEditorialService(affiliationForm)) {
+	        cityValidate(affiliationForm);
+	        regionValidate(affiliationForm);
+	        countryValidate(affiliationForm);
+        }
         departmentValidate(affiliationForm);
         roleTitleValidate(affiliationForm);
         datesValidate(affiliationForm);
         urlValidate(affiliationForm);
-
         copyErrors(affiliationForm.getAffiliationName(), affiliationForm);
         copyErrors(affiliationForm.getCity(), affiliationForm);
         copyErrors(affiliationForm.getRegion(), affiliationForm);
@@ -220,6 +203,7 @@ public class AffiliationsController extends BaseWorkspaceController {
 
         if (!PojoUtil.isEmpty(affiliationForm.getEndDate()))
             copyErrors(affiliationForm.getEndDate(), affiliationForm);
+        
         if (affiliationForm.getErrors().isEmpty()) {
             if (PojoUtil.isEmpty(affiliationForm.getPutCode()))
                 addAffiliation(affiliationForm);
@@ -237,20 +221,21 @@ public class AffiliationsController extends BaseWorkspaceController {
      */
     private void addAffiliation(AffiliationForm affiliationForm) {
         Affiliation affiliation = affiliationForm.toAffiliation();
+        List<Affiliation> existingAffiliations = affiliationsManagerReadOnly.getAffiliations(getCurrentUserOrcid());
         if (affiliation instanceof Distinction) {
-            affiliation = affiliationsManager.createDistinctionAffiliation(getCurrentUserOrcid(), (Distinction) affiliation, false);
+            affiliation = affiliationsManager.createDistinctionAffiliation(getCurrentUserOrcid(), (Distinction) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Education) {
-            affiliation = affiliationsManager.createEducationAffiliation(getCurrentUserOrcid(), (Education) affiliation, false);
+            affiliation = affiliationsManager.createEducationAffiliation(getCurrentUserOrcid(), (Education) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Employment) {
-            affiliation = affiliationsManager.createEmploymentAffiliation(getCurrentUserOrcid(), (Employment) affiliation, false);
+            affiliation = affiliationsManager.createEmploymentAffiliation(getCurrentUserOrcid(), (Employment) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof InvitedPosition) {
-            affiliation = affiliationsManager.createInvitedPositionAffiliation(getCurrentUserOrcid(), (InvitedPosition) affiliation, false);
+            affiliation = affiliationsManager.createInvitedPositionAffiliation(getCurrentUserOrcid(), (InvitedPosition) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Membership) {
-            affiliation = affiliationsManager.createMembershipAffiliation(getCurrentUserOrcid(), (Membership) affiliation, false);
+            affiliation = affiliationsManager.createMembershipAffiliation(getCurrentUserOrcid(), (Membership) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Qualification) {
-            affiliation = affiliationsManager.createQualificationAffiliation(getCurrentUserOrcid(), (Qualification) affiliation, false);
+            affiliation = affiliationsManager.createQualificationAffiliation(getCurrentUserOrcid(), (Qualification) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Service) {
-            affiliation = affiliationsManager.createServiceAffiliation(getCurrentUserOrcid(), (Service) affiliation, false);
+            affiliation = affiliationsManager.createServiceAffiliation(getCurrentUserOrcid(), (Service) affiliation, false, existingAffiliations);
         } else {
             throw new IllegalArgumentException("Invalid affiliation type: " + affiliation.getClass().getName());
         }
@@ -268,20 +253,21 @@ public class AffiliationsController extends BaseWorkspaceController {
             throw new Exception(getMessage("web.orcid.activity_incorrectsource.exception"));
 
         Affiliation affiliation = affiliationForm.toAffiliation();
+        List<Affiliation> existingAffiliations = affiliationsManagerReadOnly.getAffiliations(getCurrentUserOrcid());
         if (affiliation instanceof Distinction) {
-            affiliation = affiliationsManager.updateDistinctionAffiliation(getCurrentUserOrcid(), (Distinction) affiliation, false);
+            affiliation = affiliationsManager.updateDistinctionAffiliation(getCurrentUserOrcid(), (Distinction) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Education) {
-            affiliation = affiliationsManager.updateEducationAffiliation(getCurrentUserOrcid(), (Education) affiliation, false);
+            affiliation = affiliationsManager.updateEducationAffiliation(getCurrentUserOrcid(), (Education) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Employment) {
-            affiliation = affiliationsManager.updateEmploymentAffiliation(getCurrentUserOrcid(), (Employment) affiliation, false);
+            affiliation = affiliationsManager.updateEmploymentAffiliation(getCurrentUserOrcid(), (Employment) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof InvitedPosition) {
-            affiliation = affiliationsManager.updateInvitedPositionAffiliation(getCurrentUserOrcid(), (InvitedPosition) affiliation, false);
+            affiliation = affiliationsManager.updateInvitedPositionAffiliation(getCurrentUserOrcid(), (InvitedPosition) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Membership) {
-            affiliation = affiliationsManager.updateMembershipAffiliation(getCurrentUserOrcid(), (Membership) affiliation, false);
+            affiliation = affiliationsManager.updateMembershipAffiliation(getCurrentUserOrcid(), (Membership) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Qualification) {
-            affiliation = affiliationsManager.updateQualificationAffiliation(getCurrentUserOrcid(), (Qualification) affiliation, false);
+            affiliation = affiliationsManager.updateQualificationAffiliation(getCurrentUserOrcid(), (Qualification) affiliation, false, existingAffiliations);
         } else if (affiliation instanceof Service) {
-            affiliation = affiliationsManager.updateServiceAffiliation(getCurrentUserOrcid(), (Service) affiliation, false);
+            affiliation = affiliationsManager.updateServiceAffiliation(getCurrentUserOrcid(), (Service) affiliation, false, existingAffiliations);
         } else {
             throw new IllegalArgumentException("Invalid affiliation type: " + affiliation.getClass().getName());
         }
@@ -532,6 +518,7 @@ public class AffiliationsController extends BaseWorkspaceController {
         String orcid = getCurrentUserOrcid();
         AffiliationGroupContainer result = new AffiliationGroupContainer();
         Map<AffiliationType, List<AffiliationGroup<AffiliationSummary>>> affiliationsMap = affiliationsManager.getGroupedAffiliations(orcid, false);
+        Long featuredId = affiliationsManagerReadOnly.getFeaturedFlag(orcid);
         for (AffiliationType type : AffiliationType.values()) {
             if (affiliationsMap.containsKey(type)) {
                 List<AffiliationGroup<AffiliationSummary>> elementsList = affiliationsMap.get(type);
@@ -545,6 +532,17 @@ public class AffiliationsController extends BaseWorkspaceController {
                         if (!PojoUtil.isEmpty(groupForm.getDefaultAffiliation().getCountry())) {
                             // Set country name
                             defaultAffiliation.setCountryForDisplay(groupForm.getDefaultAffiliation().getCountry().getValue());
+                        }
+                        // Set featured flag on default
+                        if (defaultAffiliation.getPutCode() != null && defaultAffiliation.getPutCode().getValue() != null) {
+                            try {
+                                Long pc = Long.valueOf(defaultAffiliation.getPutCode().getValue());
+                                if (featuredId != null && featuredId.equals(pc)) {
+                                    defaultAffiliation.setFeatured(Boolean.TRUE);
+                                }
+                            } catch (NumberFormatException nfe) {
+                                // ignore invalid putCode
+                            }
                         }
                         // Set org disambiguated data
                         if (!PojoUtil.isEmpty(defaultAffiliation.getOrgDisambiguatedId())) {
@@ -566,6 +564,17 @@ public class AffiliationsController extends BaseWorkspaceController {
                         if (!PojoUtil.isEmpty(aff.getCountry())) {
                             // Set country name
                             aff.setCountryForDisplay(aff.getCountry().getValue());
+                        }
+                        // Set featured flag on each affiliation
+                        if (aff.getPutCode() != null && aff.getPutCode().getValue() != null) {
+                            try {
+                                Long pc = Long.valueOf(aff.getPutCode().getValue());
+                                if (featuredId != null && featuredId.equals(pc)) {
+                                    aff.setFeatured(Boolean.TRUE);
+                                }
+                            } catch (NumberFormatException nfe) {
+                                // ignore invalid putCode
+                            }
                         }
                         // Set org disambiguated data
                         if (!PojoUtil.isEmpty(aff.getOrgDisambiguatedId())) {
@@ -595,5 +604,37 @@ public class AffiliationsController extends BaseWorkspaceController {
     public @ResponseBody boolean updateToMaxDisplay(@RequestParam(value = "putCode") Long putCode) {
         String orcid = getEffectiveUserOrcid();
         return affiliationsManager.updateToMaxDisplay(orcid, putCode);
+    }
+
+    @RequestMapping(value = "/featuredAffiliation.json", method = RequestMethod.PUT)
+    public @ResponseBody ResponseEntity<Map<String, Object>> setFeaturedAffiliation(@RequestBody Map<String, Long> payload) {
+        String orcid = getEffectiveUserOrcid();
+        Map<String, Object> body = new HashMap<String, Object>();
+        Long putCode = null;
+        boolean hasKey = false;
+        if (payload != null) {
+            if (payload.containsKey("putCode")) {
+                hasKey = true;
+                putCode = payload.get("putCode");
+            } else if (payload.containsKey("affiliationId")) {
+                hasKey = true;
+                putCode = payload.get("affiliationId");
+            }
+        }
+        // If client explicitly sent a null value, clear all featured flags
+        if (hasKey && putCode == null) {
+            affiliationsManager.clearFeatured(orcid);
+            body.put("ok", Boolean.TRUE);
+            return new ResponseEntity<Map<String, Object>>(body, HttpStatus.OK);
+        }
+        // If no key provided or null without explicit key, return bad request
+        if (!hasKey || putCode == null) {
+            body.put("ok", Boolean.FALSE);
+            body.put("message", "putCode is required");
+            return new ResponseEntity<Map<String, Object>>(body, HttpStatus.BAD_REQUEST);
+        }
+        boolean updated = affiliationsManager.setOnlyFeatured(orcid, putCode);
+        body.put("ok", Boolean.valueOf(updated));
+        return new ResponseEntity<Map<String, Object>>(body, HttpStatus.OK);
     }
 }

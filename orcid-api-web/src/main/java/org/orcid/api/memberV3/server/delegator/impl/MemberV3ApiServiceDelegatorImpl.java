@@ -1,69 +1,19 @@
 package org.orcid.api.memberV3.server.delegator.impl;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
-import javax.annotation.Resource;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.Response.Status;
-
 import org.orcid.api.common.util.ApiUtils;
 import org.orcid.api.common.util.v3.ActivityUtils;
 import org.orcid.api.common.util.v3.ElementUtils;
 import org.orcid.api.memberV3.server.delegator.MemberV3ApiServiceDelegator;
 import org.orcid.core.common.manager.EmailDomainManager;
 import org.orcid.core.common.manager.SummaryManager;
-import org.orcid.core.exception.DeactivatedException;
-import org.orcid.core.exception.DuplicatedGroupIdRecordException;
-import org.orcid.core.exception.MismatchedPutCodeException;
-import org.orcid.core.exception.OrcidAccessControlException;
-import org.orcid.core.exception.OrcidBadRequestException;
-import org.orcid.core.exception.OrcidCoreExceptionMapper;
-import org.orcid.core.exception.OrcidNoBioException;
-import org.orcid.core.exception.OrcidNoResultException;
+import org.orcid.core.exception.*;
 import org.orcid.core.groupIds.issn.IssnGroupIdPatternMatcher;
 import org.orcid.core.locale.LocaleManager;
 import org.orcid.core.manager.StatusManager;
 import org.orcid.core.manager.impl.OrcidUrlManager;
 import org.orcid.core.manager.read_only.ClientDetailsManagerReadOnly;
-import org.orcid.core.manager.v3.AddressManager;
-import org.orcid.core.manager.v3.AffiliationsManager;
-import org.orcid.core.manager.v3.ExternalIdentifierManager;
-import org.orcid.core.manager.v3.GroupIdRecordManager;
-import org.orcid.core.manager.v3.OrcidSearchManager;
-import org.orcid.core.manager.v3.OrcidSecurityManager;
-import org.orcid.core.manager.v3.OtherNameManager;
-import org.orcid.core.manager.v3.PeerReviewManager;
-import org.orcid.core.manager.v3.ProfileEntityManager;
-import org.orcid.core.manager.v3.ProfileFundingManager;
-import org.orcid.core.manager.v3.ProfileKeywordManager;
-import org.orcid.core.manager.v3.ResearchResourceManager;
-import org.orcid.core.manager.v3.ResearcherUrlManager;
-import org.orcid.core.manager.v3.SourceManager;
-import org.orcid.core.manager.v3.WorkManager;
-import org.orcid.core.manager.v3.read_only.ActivitiesSummaryManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.AddressManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.AffiliationsManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.BiographyManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.ClientManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.EmailManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.ExternalIdentifierManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.GroupIdRecordManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.OtherNameManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.PeerReviewManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.PersonDetailsManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.PersonalDetailsManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.ProfileFundingManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.ProfileKeywordManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.RecordManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.ResearchResourceManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.ResearcherUrlManagerReadOnly;
-import org.orcid.core.manager.v3.read_only.WorkManagerReadOnly;
+import org.orcid.core.manager.v3.*;
+import org.orcid.core.manager.v3.read_only.*;
 import org.orcid.core.model.RecordSummary;
 import org.orcid.core.utils.SourceEntityUtils;
 import org.orcid.core.utils.v3.ContributorUtils;
@@ -74,68 +24,30 @@ import org.orcid.jaxb.model.message.ScopePathType;
 import org.orcid.jaxb.model.v3.release.client.ClientSummary;
 import org.orcid.jaxb.model.v3.release.groupid.GroupIdRecord;
 import org.orcid.jaxb.model.v3.release.groupid.GroupIdRecords;
-import org.orcid.jaxb.model.v3.release.record.Address;
-import org.orcid.jaxb.model.v3.release.record.Addresses;
-import org.orcid.jaxb.model.v3.release.record.Biography;
-import org.orcid.jaxb.model.v3.release.record.Distinction;
-import org.orcid.jaxb.model.v3.release.record.Education;
-import org.orcid.jaxb.model.v3.release.record.Email;
-import org.orcid.jaxb.model.v3.release.record.Emails;
-import org.orcid.jaxb.model.v3.release.record.Employment;
-import org.orcid.jaxb.model.v3.release.record.ExternalID;
-import org.orcid.jaxb.model.v3.release.record.Funding;
-import org.orcid.jaxb.model.v3.release.record.InvitedPosition;
-import org.orcid.jaxb.model.v3.release.record.Keyword;
-import org.orcid.jaxb.model.v3.release.record.Keywords;
-import org.orcid.jaxb.model.v3.release.record.Membership;
-import org.orcid.jaxb.model.v3.release.record.OtherName;
-import org.orcid.jaxb.model.v3.release.record.OtherNames;
-import org.orcid.jaxb.model.v3.release.record.PeerReview;
-import org.orcid.jaxb.model.v3.release.record.Person;
-import org.orcid.jaxb.model.v3.release.record.PersonExternalIdentifier;
-import org.orcid.jaxb.model.v3.release.record.PersonExternalIdentifiers;
-import org.orcid.jaxb.model.v3.release.record.PersonalDetails;
-import org.orcid.jaxb.model.v3.release.record.Qualification;
-import org.orcid.jaxb.model.v3.release.record.Record;
-import org.orcid.jaxb.model.v3.release.record.ResearchResource;
-import org.orcid.jaxb.model.v3.release.record.ResearcherUrl;
-import org.orcid.jaxb.model.v3.release.record.ResearcherUrls;
-import org.orcid.jaxb.model.v3.release.record.Service;
-import org.orcid.jaxb.model.v3.release.record.SourceAware;
-import org.orcid.jaxb.model.v3.release.record.Work;
-import org.orcid.jaxb.model.v3.release.record.WorkBulk;
-import org.orcid.jaxb.model.v3.release.record.summary.ActivitiesSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.DistinctionSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.Distinctions;
-import org.orcid.jaxb.model.v3.release.record.summary.EducationSummary;
+import org.orcid.jaxb.model.v3.release.record.*;
+import org.orcid.jaxb.model.v3.release.record.summary.*;
 import org.orcid.jaxb.model.v3.release.record.summary.Educations;
-import org.orcid.jaxb.model.v3.release.record.summary.EmploymentSummary;
 import org.orcid.jaxb.model.v3.release.record.summary.Employments;
-import org.orcid.jaxb.model.v3.release.record.summary.FundingSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.Fundings;
-import org.orcid.jaxb.model.v3.release.record.summary.InvitedPositionSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.InvitedPositions;
-import org.orcid.jaxb.model.v3.release.record.summary.MembershipSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.Memberships;
-import org.orcid.jaxb.model.v3.release.record.summary.PeerReviewSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.PeerReviews;
-import org.orcid.jaxb.model.v3.release.record.summary.QualificationSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.Qualifications;
-import org.orcid.jaxb.model.v3.release.record.summary.ResearchResourceSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.ResearchResources;
-import org.orcid.jaxb.model.v3.release.record.summary.ServiceSummary;
-import org.orcid.jaxb.model.v3.release.record.summary.Services;
-import org.orcid.jaxb.model.v3.release.record.summary.WorkSummary;
 import org.orcid.jaxb.model.v3.release.record.summary.Works;
+import org.orcid.jaxb.model.v3.release.record.Record;
 import org.orcid.jaxb.model.v3.release.search.Search;
 import org.orcid.jaxb.model.v3.release.search.expanded.ExpandedSearch;
-import org.orcid.persistence.jpa.entities.EmailDomainEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Component;
+
+import jakarta.annotation.Resource;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response.Status;
+import java.util.*;
+
+import org.apache.hc.core5.http.ParseException;
 
 @Component
 public class MemberV3ApiServiceDelegatorImpl implements
         MemberV3ApiServiceDelegator<Distinction, Education, Employment, PersonExternalIdentifier, InvitedPosition, Funding, GroupIdRecord, Membership, OtherName, PeerReview, Qualification, ResearcherUrl, Service, Work, WorkBulk, Address, Keyword, ResearchResource> {
+    protected static final Logger LOGGER = LoggerFactory.getLogger(MemberV3ApiServiceDelegatorImpl.class);
 
     // Managers that goes to the primary database
     @Resource(name = "workManagerV3")
@@ -307,7 +219,6 @@ public class MemberV3ApiServiceDelegatorImpl implements
         Record record = recordManagerReadOnly.getRecord(orcid, filterVersionOfIdentifiers);
         orcidSecurityManager.checkAndFilter(orcid, record);
         if (record.getPerson() != null) {
-            emailDomainManager.processProfessionalEmailsForV3API(record.getPerson().getEmails());
             sourceUtils.setSourceName(record.getPerson());
         }
         if (record.getActivitiesSummary() != null) {
@@ -336,7 +247,6 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, true);
         Work w = workManagerReadOnly.getWork(orcid, putCode);
         orcidSecurityManager.checkAndFilter(orcid, w, ScopePathType.ORCID_WORKS_READ_LIMITED);
-        contributorUtils.filterContributorPrivateData(w);
         ActivityUtils.cleanEmptyFields(w);
         ActivityUtils.setPathToActivity(w, orcid);
         sourceUtils.setSourceName(w);
@@ -347,7 +257,6 @@ public class MemberV3ApiServiceDelegatorImpl implements
     public Response viewWorks(String orcid) {
         checkProfileStatus(orcid, true);
         List<WorkSummary> worksList = workManagerReadOnly.getWorksSummaryList(orcid);
-
         // Lets copy the list so we don't modify the cached collection
         List<WorkSummary> filteredList = null;
         if (worksList != null) {
@@ -394,7 +303,8 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.ORCID_WORKS_CREATE, ScopePathType.ORCID_WORKS_UPDATE);
         clearSource(work);
-        Work w = workManager.createWork(orcid, work, true);
+        List<Work> existingWorks = workManagerReadOnly.findWorks(orcid);
+        Work w = workManager.createWork(orcid, work, true, existingWorks);
         sourceUtils.setSourceName(w);
         return apiUtils.buildApiResponse(orcid, "work", String.valueOf(w.getPutCode()), "apiError.creatework_response.exception");
     }
@@ -407,7 +317,8 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, work.getPutCode()));                                     
         }
         clearSource(work);
-        Work w = workManager.updateWork(orcid, work, true);
+        List<Work> existingWorks = workManagerReadOnly.findWorks(orcid);
+        Work w = workManager.updateWork(orcid, work, true, existingWorks);
         sourceUtils.setSourceName(w);
         return Response.ok(w).build();
     }
@@ -424,7 +335,8 @@ public class MemberV3ApiServiceDelegatorImpl implements
                 }
             }
         }
-        works = workManager.createWorks(orcid, works);
+        List<Work> existingWorks = workManagerReadOnly.findWorks(orcid);
+        works = workManager.createWorks(orcid, works, existingWorks);
         sourceUtils.setSourceName(works);
         return Response.ok(works).build();
     }
@@ -558,7 +470,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(education);
-        Education e = affiliationsManager.createEducationAffiliation(orcid, education, true);
+        Education e = affiliationsManager.createEducationAffiliation(orcid, education, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "education", String.valueOf(e.getPutCode()), "apiError.createeducation_response.exception");
     }
@@ -571,7 +483,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, education.getPutCode()));                            
         }
         clearSource(education);
-        Education e = affiliationsManager.updateEducationAffiliation(orcid, education, true);
+        Education e = affiliationsManager.updateEducationAffiliation(orcid, education, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }
@@ -622,7 +534,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(employment);
-        Employment e = affiliationsManager.createEmploymentAffiliation(orcid, employment, true);
+        Employment e = affiliationsManager.createEmploymentAffiliation(orcid, employment, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "employment", String.valueOf(e.getPutCode()), "apiError.createemployment_response.exception");
     }
@@ -635,7 +547,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, employment.getPutCode()));                            
         }
         clearSource(employment);
-        Employment e = affiliationsManager.updateEmploymentAffiliation(orcid, employment, true);
+        Employment e = affiliationsManager.updateEmploymentAffiliation(orcid, employment, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }
@@ -885,8 +797,6 @@ public class MemberV3ApiServiceDelegatorImpl implements
             // scope
             orcidSecurityManager.checkAndFilter(orcid, emails.getEmails(), ScopePathType.ORCID_BIO_READ_LIMITED);
         }
-
-        emailDomainManager.processProfessionalEmailsForV3API(emails);
 
         ElementUtils.setPathToEmail(emails, orcid);
         Api3_0LastModifiedDatesHelper.calculateLastModified(emails);
@@ -1166,7 +1076,6 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, true);
         Person person = personDetailsManagerReadOnly.getPersonDetails(orcid, false);
         orcidSecurityManager.checkAndFilter(orcid, person);
-        emailDomainManager.processProfessionalEmailsForV3API(person.getEmails());
         ElementUtils.setPathToPerson(person, orcid);
         Api3_0LastModifiedDatesHelper.calculateLastModified(person);
         sourceUtils.setSourceName(person);
@@ -1174,7 +1083,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
     }
 
     @Override
-    public Response searchByQuery(Map<String, List<String>> solrParams) {
+    public Response searchByQuery(Map<String, List<String>> solrParams) throws ParseException {
         orcidSecurityManager.checkScopes(ScopePathType.READ_PUBLIC);
         validateSearchParams(solrParams);
         Search search = orcidSearchManager.findOrcidIds(solrParams);
@@ -1182,7 +1091,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
     }
     
     @Override
-    public Response searchByQueryCSV(Map<String, List<String>> solrParams) {
+    public Response searchByQueryCSV(Map<String, List<String>> solrParams) throws ParseException {
         validateSearchParams(solrParams);
         String search = orcidSearchManager.findOrcidIdsAsCSV(solrParams);
         return Response.ok(search).build();
@@ -1204,8 +1113,8 @@ public class MemberV3ApiServiceDelegatorImpl implements
         
         WorkBulk workBulk = workManagerReadOnly.findWorkBulk(orcid, putCodes);
         orcidSecurityManager.checkAndFilter(orcid, workBulk, ScopePathType.ORCID_WORKS_READ_LIMITED);
-        contributorUtils.filterContributorPrivateData(workBulk);
         ActivityUtils.cleanEmptyFields(workBulk);
+        ActivityUtils.setPathToBulk(workBulk, orcid);
         sourceUtils.setSourceName(workBulk);
         return Response.ok(workBulk).build();
     }
@@ -1284,7 +1193,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(distinction);
-        Distinction e = affiliationsManager.createDistinctionAffiliation(orcid, distinction, true);
+        Distinction e = affiliationsManager.createDistinctionAffiliation(orcid, distinction, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "distinction", String.valueOf(e.getPutCode()), "apiError.createdistinction_response.exception");
     }
@@ -1297,7 +1206,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, distinction.getPutCode()));                            
         }
         clearSource(distinction);
-        Distinction e = affiliationsManager.updateDistinctionAffiliation(orcid, distinction, true);
+        Distinction e = affiliationsManager.updateDistinctionAffiliation(orcid, distinction, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }
@@ -1350,7 +1259,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(invitedPosition);
-        InvitedPosition e = affiliationsManager.createInvitedPositionAffiliation(orcid, invitedPosition, true);
+        InvitedPosition e = affiliationsManager.createInvitedPositionAffiliation(orcid, invitedPosition, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "invited-position", String.valueOf(e.getPutCode()), "apiError.createdistinction_response.exception");
     }
@@ -1363,7 +1272,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, invitedPosition.getPutCode()));                 
         }
         clearSource(invitedPosition);
-        InvitedPosition e = affiliationsManager.updateInvitedPositionAffiliation(orcid, invitedPosition, true);
+        InvitedPosition e = affiliationsManager.updateInvitedPositionAffiliation(orcid, invitedPosition, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }
@@ -1416,7 +1325,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(membership);
-        Membership e = affiliationsManager.createMembershipAffiliation(orcid, membership, true);
+        Membership e = affiliationsManager.createMembershipAffiliation(orcid, membership, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "membership", String.valueOf(e.getPutCode()), "apiError.createdistinction_response.exception");
     }
@@ -1429,7 +1338,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, membership.getPutCode()));
         }
         clearSource(membership);
-        Membership e = affiliationsManager.updateMembershipAffiliation(orcid, membership, true);
+        Membership e = affiliationsManager.updateMembershipAffiliation(orcid, membership, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }
@@ -1482,7 +1391,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(qualification);
-        Qualification e = affiliationsManager.createQualificationAffiliation(orcid, qualification, true);
+        Qualification e = affiliationsManager.createQualificationAffiliation(orcid, qualification, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "qualification", String.valueOf(e.getPutCode()), "apiError.createdistinction_response.exception");
     }
@@ -1495,7 +1404,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, qualification.getPutCode()));                 
         }
         clearSource(qualification);
-        Qualification e = affiliationsManager.updateQualificationAffiliation(orcid, qualification, true);
+        Qualification e = affiliationsManager.updateQualificationAffiliation(orcid, qualification, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }
@@ -1548,7 +1457,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
         checkProfileStatus(orcid, false);
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.AFFILIATIONS_CREATE, ScopePathType.AFFILIATIONS_UPDATE);
         clearSource(service);
-        Service e = affiliationsManager.createServiceAffiliation(orcid, service, true);
+        Service e = affiliationsManager.createServiceAffiliation(orcid, service, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return apiUtils.buildApiResponse(orcid, "service", String.valueOf(e.getPutCode()), "apiError.createdistinction_response.exception");
     }
@@ -1561,7 +1470,7 @@ public class MemberV3ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(addParmsMismatchedPutCode(putCode, service.getPutCode()));      
         }
         clearSource(service);
-        Service e = affiliationsManager.updateServiceAffiliation(orcid, service, true);
+        Service e = affiliationsManager.updateServiceAffiliation(orcid, service, true, affiliationsManagerReadOnly.getAffiliations(orcid));
         sourceUtils.setSourceName(e);
         return Response.ok(e).build();
     }

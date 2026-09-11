@@ -1,13 +1,8 @@
 package org.orcid.core.manager.impl;
 
-import java.util.Calendar;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.orcid.core.constants.OrcidOauth2Constants;
 import org.orcid.core.manager.NotificationManager;
@@ -18,7 +13,6 @@ import org.orcid.persistence.dao.UserConnectionDao;
 import org.orcid.persistence.jpa.entities.UserConnectionStatus;
 import org.orcid.persistence.jpa.entities.UserconnectionEntity;
 import org.orcid.persistence.jpa.entities.UserconnectionPK;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 
@@ -35,7 +29,9 @@ public class UserConnectionManagerImpl implements UserConnectionManager {
 
     @Override
     public List<UserconnectionEntity> findByOrcid(String orcid) {
-        return userConnectionDao.findByOrcid(orcid);
+        List<UserconnectionEntity> userConnections = userConnectionDao.findByOrcid(orcid);
+        userConnections.removeIf(userConnection -> userConnection.getId().getProviderid().equals("google") || userConnection.getId().getProviderid().equals("facebook"));
+        return userConnections;
     }
 
     @Override
@@ -73,7 +69,6 @@ public class UserConnectionManagerImpl implements UserConnectionManager {
     }
 
     @Override
-    @Transactional
     public void update(String providerUserId, String providerId, String accessToken, Long expireTime) {
         UserconnectionEntity userConnection = userConnectionDao.findByProviderIdAndProviderUserId(providerUserId, providerId);
         if (userConnection != null) {

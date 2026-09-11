@@ -12,7 +12,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.commons.lang3.StringUtils;
 import org.orcid.core.exception.ActivityIdentifierValidationException;
@@ -21,6 +21,9 @@ import org.orcid.core.exception.ActivityTypeValidationException;
 import org.orcid.core.exception.InvalidAmountException;
 import org.orcid.core.exception.InvalidDisambiguatedOrgException;
 import org.orcid.core.exception.InvalidFuzzyDateException;
+import org.orcid.core.exception.InvalidNoOrgOrExternalIdException;
+import org.orcid.core.exception.InvalidOrgAddressNoCountryButCityRegionException;
+import org.orcid.core.exception.InvalidOrgAddressException;
 import org.orcid.core.exception.InvalidOrgException;
 import org.orcid.core.exception.InvalidPutCodeException;
 import org.orcid.core.exception.MissingStartDateException;
@@ -55,6 +58,8 @@ import org.orcid.jaxb.model.v3.release.common.Visibility;
 import org.orcid.jaxb.model.v3.release.common.Year;
 import org.orcid.jaxb.model.v3.release.groupid.GroupIdRecord;
 import org.orcid.jaxb.model.v3.release.record.Affiliation;
+import org.orcid.jaxb.model.v3.release.record.Education;
+import org.orcid.jaxb.model.v3.release.record.Employment;
 import org.orcid.jaxb.model.v3.release.record.ExternalID;
 import org.orcid.jaxb.model.v3.release.record.ExternalIDs;
 import org.orcid.jaxb.model.v3.release.record.ExternalIdentifiersAwareActivity;
@@ -238,10 +243,10 @@ public class ActivityValidator {
                         LOGGER.warn("Invalid DOI provided: " + extId.getValue());
                     }
                 }
-                
+
                 if (extId.getRelationship() != null && Relationship.FUNDED_BY.value().equals(extId.getRelationship().value())) {
-                    if(!ExternalIdentifierFundedByHelper.isExtIdTypeAllowedForFundedBy(extId.getType())) {
-                        throw new OrcidValidationException("External ID " + extId.getType() + " not supported for relationship funded_by"); 
+                    if (!ExternalIdentifierFundedByHelper.isExtIdTypeAllowedForFundedBy(extId.getType())) {
+                        throw new OrcidValidationException("External ID " + extId.getType() + " not supported for relationship funded_by");
                     }
                 }
             }
@@ -280,7 +285,7 @@ public class ActivityValidator {
         }
 
         if (work.getPutCode() != null && createFlag) {
-            throw InvalidPutCodeException.forSource(activeSource);
+            throw InvalidPutCodeException.forSource(sourceEntityUtils.getSourceName(activeSource));
         }
 
         // Check that we are not changing the visibility
@@ -334,7 +339,7 @@ public class ActivityValidator {
         }
 
         if (funding.getPutCode() != null && createFlag) {
-            throw InvalidPutCodeException.forSource(activeSource);
+            throw InvalidPutCodeException.forSource(sourceEntityUtils.getSourceName(activeSource));
         }
 
         if (isApiRequest) {
@@ -375,6 +380,53 @@ public class ActivityValidator {
         }
     }
 
+    private void validateOrgAddress(OrganizationHolder organizationHolder) {
+        if (organizationHolder.getOrganization() == null) {
+            throw new InvalidOrgException();
+        }
+
+        Organization org = organizationHolder.getOrganization();
+        if (org.getAddress() == null || PojoUtil.isEmpty(org.getAddress().getCity()) || org.getAddress().getCountry() == null
+                || PojoUtil.isEmpty(org.getAddress().getCountry().name())) {
+            throw new InvalidOrgAddressException();
+        }
+    }
+
+    /*
+     * Validates that either organization info is provided or external id
+     * present
+     */
+    private void validateDisambiguatedOrgAndExternalIdentifiersForProfessionalActivities(Affiliation affiliation) {
+        if (affiliation.getOrganization() == null) {
+            throw new InvalidOrgException();
+        }
+
+        Organization org = affiliation.getOrganization();
+        
+        if (org.getDisambiguatedOrganization() == null && StringUtils.isEmpty(org.getName())) {
+            throw new InvalidOrgException();
+        }
+
+        if ((org.getDisambiguatedOrganization() == null || org.getDisambiguatedOrganization().getDisambiguatedOrganizationIdentifier() == null
+                || org.getDisambiguatedOrganization().getDisambiguatedOrganizationIdentifier().isEmpty())
+                && (affiliation.getExternalIdentifiers() == null || affiliation.getExternalIdentifiers().getExternalIdentifier().isEmpty())) {
+            throw new InvalidNoOrgOrExternalIdException();
+        }
+
+        if (affiliation.getOrganization() != null) {
+
+            if (org.getAddress() != null && !PojoUtil.isEmpty(org.getAddress().getCity())
+                    && (org.getAddress().getCountry() == null || PojoUtil.isEmpty(org.getAddress().getCountry().name()))) {
+                throw new InvalidOrgAddressNoCountryButCityRegionException();
+            }
+            
+            if (org.getAddress() != null && !PojoUtil.isEmpty(org.getAddress().getRegion())
+                    && (org.getAddress().getCountry() == null || PojoUtil.isEmpty(org.getAddress().getCountry().name()))) {
+                throw new InvalidOrgAddressNoCountryButCityRegionException();
+            }
+        }
+    }
+
     private void validateDisambiguatedOrg(MultipleOrganizationHolder organizationHolder) {
         if (organizationHolder.getOrganization() == null) {
             throw new InvalidOrgException();
@@ -394,7 +446,7 @@ public class ActivityValidator {
 
     public void validateAffiliation(Affiliation affiliation, Source activeSource, boolean createFlag, boolean isApiRequest, Visibility originalVisibility) {
         if (affiliation.getPutCode() != null && createFlag) {
-            throw InvalidPutCodeException.forSource(activeSource);
+            throw InvalidPutCodeException.forSource(sourceEntityUtils.getSourceName(activeSource));
         }
 
         // Check that we are not changing the visibility
@@ -404,7 +456,15 @@ public class ActivityValidator {
         }
 
         if (isApiRequest) {
-            validateDisambiguatedOrg(affiliation);
+
+            // validate city/country requirement for education and employment
+            if (affiliation instanceof Education || affiliation instanceof Employment) {
+                validateDisambiguatedOrg(affiliation);
+                validateOrgAddress(affiliation);
+            } else {
+                validateDisambiguatedOrgAndExternalIdentifiersForProfessionalActivities(affiliation);
+            }
+
             if (affiliation.getEndDate() != null) {
                 validateFuzzyDate(affiliation.getEndDate());
             }
@@ -425,7 +485,7 @@ public class ActivityValidator {
         }
 
         if (peerReview.getPutCode() != null && createFlag) {
-            throw InvalidPutCodeException.forSource(activeSource);
+            throw InvalidPutCodeException.forSource(sourceEntityUtils.getSourceName(activeSource));
         }
 
         if (peerReview.getType() == null) {
@@ -494,9 +554,9 @@ public class ActivityValidator {
                             existingId.setNormalized(new TransientNonEmptyString(norm.normalise(existingId.getType(), existingId.getValue())));
                     }
                     if (areRelationshipsSameAndSelf(existingId.getRelationship(), newId.getRelationship()) && newId.equals(existingId)
-                            && SourceEntityUtils.isTheSameForDuplicateChecking(activeSource, existingSource)) {
+                            && sourceEntityUtils.isTheSameSource(activeSource, existingSource)) {
                         Map<String, String> params = new HashMap<String, String>();
-                        params.put("clientName", SourceEntityUtils.getSourceName(activeSource));
+                        params.put("clientName", sourceEntityUtils.getSourceName(activeSource));
                         params.put("putCode", String.valueOf(theExisting.getPutCode()));
                         throw new OrcidDuplicatedActivityException(params);
                     }
@@ -546,7 +606,7 @@ public class ActivityValidator {
         }
 
         if (rr.getPutCode() != null && createFlag) {
-            throw InvalidPutCodeException.forSource(activeSource);
+            throw InvalidPutCodeException.forSource(sourceEntityUtils.getSourceName(activeSource));
         }
 
         // Check that we are not changing the visibility

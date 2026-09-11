@@ -1,16 +1,18 @@
 package org.orcid.core.utils;
 
 import java.io.UnsupportedEncodingException;
+
 import java.text.MessageFormat;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import javax.xml.datatype.XMLGregorianCalendar;
 
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.math3.util.Pair;
 import org.orcid.core.manager.EncryptionManager;
 import org.orcid.core.manager.impl.OrcidUrlManager;
 import org.orcid.core.togglz.Features;
@@ -18,6 +20,7 @@ import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Component;
 
 import org.orcid.utils.DateUtils;
+import org.orcid.utils.OrcidStringUtils;
 
 @Component
 public class VerifyEmailUtils {
@@ -32,9 +35,10 @@ public class VerifyEmailUtils {
     private EncryptionManager encryptionManager;
 
     public Map<String, Object> createParamsForVerificationEmail(String emailFriendlyName, String orcid, String email, boolean isPrimary, Locale locale) {
+        //Check emailFriendly name for domain
         Map<String, Object> templateParams = new HashMap<String, Object>();
         templateParams.put("isPrimary", isPrimary);
-        templateParams.put("userName", emailFriendlyName);
+        templateParams.put("userName", OrcidStringUtils.isValidEmailFriendlyName(emailFriendlyName)?emailFriendlyName:orcid);
         templateParams.put("verificationUrl", createVerificationUrl(email, orcidUrlManager.getBaseUrl()));
         templateParams.put("orcidId", orcid);
         templateParams.put("subject", getSubject((isPrimary ? "email.subject.verify_reminder_primary_address" : "email.subject.verify_reminder"), locale));
@@ -79,6 +83,13 @@ public class VerifyEmailUtils {
         XMLGregorianCalendar date = DateUtils.convertToXMLGregorianCalendarNoTimeZoneNoMillis(new Date());
         String resetParams = MessageFormat.format("email={0}&issueDate={1}", new Object[] { userEmail, date.toXMLFormat() });
         return createEmailBaseUrl(resetParams, baseUri, "reset-password-email");
+    }
+    
+    public Pair<String, Date> createResetLinkForAdmin(String userEmail, String baseUri) {
+        Date issuedDate = new Date();
+        XMLGregorianCalendar date = DateUtils.convertToXMLGregorianCalendarNoTimeZoneNoMillis(issuedDate);
+        String resetParams = MessageFormat.format("email={0}&issueDate={1}&h=24", new Object[] { userEmail, date.toXMLFormat() });
+        return new Pair<String, Date> (createEmailBaseUrl(resetParams, baseUri, "reset-password-email"), issuedDate);
     }
 
     public String createReactivationUrl(String userEmail, String baseUri) {

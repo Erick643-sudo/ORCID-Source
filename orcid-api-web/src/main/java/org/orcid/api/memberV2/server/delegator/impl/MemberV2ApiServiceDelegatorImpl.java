@@ -11,8 +11,8 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import javax.annotation.Resource;
-import javax.ws.rs.core.Response;
+import jakarta.annotation.Resource;
+import jakarta.ws.rs.core.Response;
 
 import org.orcid.api.common.util.ActivityUtils;
 import org.orcid.api.common.util.ApiUtils;
@@ -104,6 +104,8 @@ import org.orcid.jaxb.model.search_v2.Search;
 import org.orcid.persistence.jpa.entities.EmailDomainEntity;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Component;
+
+import org.apache.hc.core5.http.ParseException;
 
 /**
  * <p/>
@@ -251,7 +253,6 @@ public class MemberV2ApiServiceDelegatorImpl implements
         Record record = recordManagerReadOnly.getRecord(orcid);
         orcidSecurityManager.checkAndFilter(orcid, record);
         if (record.getPerson() != null) {
-            emailDomainManager.processProfessionalEmailsForV2API(record.getPerson().getEmails());
             sourceUtils.setSourceName(record.getPerson());
         }
         if (record.getActivitiesSummary() != null) {
@@ -278,7 +279,6 @@ public class MemberV2ApiServiceDelegatorImpl implements
     public Response viewWork(String orcid, Long putCode) {
         Work w = workManagerReadOnly.getWork(orcid, putCode);
         orcidSecurityManager.checkAndFilter(orcid, w, ScopePathType.ORCID_WORKS_READ_LIMITED);
-        contributorUtils.filterContributorPrivateData(w);
         ActivityUtils.cleanEmptyFields(w);
         ActivityUtils.setPathToActivity(w, orcid);
         sourceUtils.setSourceName(w);
@@ -318,7 +318,8 @@ public class MemberV2ApiServiceDelegatorImpl implements
     public Response createWork(String orcid, Work work) {
         orcidSecurityManager.checkClientAccessAndScopes(orcid, ScopePathType.ORCID_WORKS_CREATE, ScopePathType.ORCID_WORKS_UPDATE);
         clearSource(work);
-        Work w = workManager.createWork(orcid, work, true);
+        List<Work> existingWorks = workManagerReadOnly.findWorks(orcid);
+        Work w = workManager.createWork(orcid, work, true, existingWorks);
         sourceUtils.setSourceName(w);
         return apiUtils.buildApiResponse(orcid, "work", String.valueOf(w.getPutCode()), "apiError.creatework_response.exception");
     }
@@ -333,7 +334,8 @@ public class MemberV2ApiServiceDelegatorImpl implements
             throw new MismatchedPutCodeException(params);
         }
         clearSource(work);
-        Work w = workManager.updateWork(orcid, work, true);
+        List<Work> existingWorks = workManagerReadOnly.findWorks(orcid);
+        Work w = workManager.updateWork(orcid, work, true, existingWorks);
         sourceUtils.setSourceName(w);
         return Response.ok(w).build();
     }
@@ -349,7 +351,8 @@ public class MemberV2ApiServiceDelegatorImpl implements
                 }
             }
         }
-        works = workManager.createWorks(orcid, works);
+        List<Work> existingWorks = workManagerReadOnly.findWorks(orcid);
+        works = workManager.createWorks(orcid, works, existingWorks);
         sourceUtils.setSourceName(works);
         return Response.ok(works).build();
     }
@@ -798,7 +801,6 @@ public class MemberV2ApiServiceDelegatorImpl implements
             orcidSecurityManager.checkAndFilter(orcid, emails.getEmails(), ScopePathType.ORCID_BIO_READ_LIMITED);
         }
 
-        emailDomainManager.processProfessionalEmailsForV2API(emails);
         ElementUtils.setPathToEmail(emails, orcid);
         Api2_0_LastModifiedDatesHelper.calculateLastModified(emails);
         sourceUtils.setSourceName(emails);
@@ -1066,7 +1068,6 @@ public class MemberV2ApiServiceDelegatorImpl implements
     public Response viewPerson(String orcid) {
         Person person = personDetailsManagerReadOnly.getPersonDetails(orcid);
         orcidSecurityManager.checkAndFilter(orcid, person);
-        emailDomainManager.processProfessionalEmailsForV2API(person.getEmails());
         ElementUtils.setPathToPerson(person, orcid);
         Api2_0_LastModifiedDatesHelper.calculateLastModified(person);
         sourceUtils.setSourceName(person);
@@ -1074,7 +1075,7 @@ public class MemberV2ApiServiceDelegatorImpl implements
     }
 
     @Override
-    public Response searchByQuery(Map<String, List<String>> solrParams) {
+    public Response searchByQuery(Map<String, List<String>> solrParams) throws ParseException {
         orcidSecurityManager.checkScopes(ScopePathType.READ_PUBLIC);
         validateSearchParams(solrParams);
         Search search = orcidSearchManager.findOrcidIds(solrParams);
@@ -1089,8 +1090,8 @@ public class MemberV2ApiServiceDelegatorImpl implements
         
         WorkBulk workBulk = workManagerReadOnly.findWorkBulk(orcid, putCodes);
         orcidSecurityManager.checkAndFilter(orcid, workBulk, ScopePathType.ORCID_WORKS_READ_LIMITED);
-        contributorUtils.filterContributorPrivateData(workBulk);
         ActivityUtils.cleanEmptyFields(workBulk);
+        ActivityUtils.setPathToBulk(workBulk, orcid);
         sourceUtils.setSourceName(workBulk);
         return Response.ok(workBulk).build();
     }

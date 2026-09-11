@@ -17,11 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.annotation.Resource;
-import javax.persistence.NoResultException;
-import javax.ws.rs.WebApplicationException;
-import javax.ws.rs.core.Response;
+import jakarta.annotation.Resource;
+import jakarta.persistence.NoResultException;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 
+import org.apache.hc.core5.http.ParseException;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -597,12 +598,12 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
         assertEquals(Visibility.PUBLIC.value(), email.getVisibility().value());
         assertEquals(Visibility.PUBLIC.value(), email2.getVisibility().value());
         assertEquals("/0000-0000-0000-0003/email", emails.getPath());
-        assertEquals("0000-0000-0000-0000", email.getSource().retrieveSourcePath());
-        assertEquals("ORCID email validation", email.getSource().getSourceName().getContent());
+        assertEquals("APP-5555555555555555", email.getSource().retrieveSourcePath());
+        assertEquals("Source Client 1", email.getSource().getSourceName().getContent());
         assertNull(email.getSource().getSourceOrcid());
-        assertEquals("0000-0000-0000-0000", email2.getSource().retrieveSourcePath());
-        assertEquals("ORCID email validation", email2.getSource().getSourceName().getContent());
-        assertNull(email2.getSource().getSourceOrcid());
+        assertEquals("0000-0000-0000-0003", email2.getSource().retrieveSourcePath());
+        assertEquals("Credit Name", email2.getSource().getSourceName().getContent());
+        assertEquals("0000-0000-0000-0003", email2.getSource().getSourceOrcid().getPath());
     }
 
     @Test
@@ -1214,7 +1215,7 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
     }
 
     @Test
-    public void testSearchByQuery() {
+    public void testSearchByQuery() throws ParseException {
         Search search = new Search();
         Result result = new Result();
         result.setOrcidIdentifier(new OrcidIdentifier("some-orcid-id"));
@@ -1239,7 +1240,7 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
     }
 
     @Test(expected = OrcidBadRequestException.class)
-    public void testSearchByQueryTooManyRows() {
+    public void testSearchByQueryTooManyRows() throws ParseException {
         Map<String, List<String>> params = new HashMap<>();
         params.put("rows", Arrays.asList(Integer.toString(OrcidSearchManager.MAX_SEARCH_ROWS + 20)));
 
@@ -1252,7 +1253,7 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
     }
 
     @Test(expected = SearchStartParameterLimitExceededException.class)
-    public void testSearchByQueryIllegalStart() {
+    public void testSearchByQueryIllegalStart() throws ParseException {
         Map<String, List<String>> params = new HashMap<>();
         params.put("start", Arrays.asList(Integer.toString(OrcidSearchManager.MAX_SEARCH_START + 20)));
 
@@ -1269,7 +1270,7 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
     }
 
     @Test
-    public void testSearchByQueryLegalStart() {
+    public void testSearchByQueryLegalStart() throws ParseException {
         Map<String, List<String>> params = new HashMap<>();
         params.put("start", Arrays.asList(Integer.toString(OrcidSearchManager.MAX_SEARCH_START)));
 
@@ -1297,7 +1298,7 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
     }
 
     @Test
-    public void testViewClientSummary() {
+    public void testViewClientSummary() throws ParseException {
         Response response = serviceDelegator.viewClient("APP-6666666666666666");
         assertNotNull(response.getEntity());
         assertTrue(response.getEntity() instanceof ClientSummary);
@@ -1836,12 +1837,12 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
         assertNotNull(email.getLastModifiedDate().getValue());
         assertNotNull(email2.getLastModifiedDate());
         assertNotNull(email2.getLastModifiedDate().getValue());
-        assertEquals("0000-0000-0000-0000", email.getSource().retrieveSourcePath());
+        assertEquals("APP-5555555555555555", email.getSource().retrieveSourcePath());
         assertNull(email.getSource().getSourceOrcid());
-        assertEquals("ORCID email validation", email.getSource().getSourceName().getContent());
-        assertEquals("0000-0000-0000-0000", email2.getSource().retrieveSourcePath());
-        assertNull(email2.getSource().getSourceOrcid());
-        assertEquals("ORCID email validation", email2.getSource().getSourceName().getContent());
+        assertEquals("Source Client 1", email.getSource().getSourceName().getContent());
+        assertEquals("0000-0000-0000-0003", email2.getSource().retrieveSourcePath());
+        assertEquals("0000-0000-0000-0003", email2.getSource().getSourceOrcid().getPath());
+        assertEquals("Credit Name", email2.getSource().getSourceName().getContent());
         assertEquals(Visibility.PUBLIC.value(), email.getVisibility().value());
         assertEquals(Visibility.PUBLIC.value(), email2.getVisibility().value());
         assertNotNull(person.getExternalIdentifiers());
@@ -2162,7 +2163,7 @@ public class PublicV3ApiServiceDelegatorTest extends DBUnitTest {
     }
     
     @Test
-    public void testExpandedSearchByQueryNoRowsParamSet() {
+    public void testExpandedSearchByQueryNoRowsParamSet() throws ParseException {
         ExpandedSearch search = new ExpandedSearch();
         ExpandedResult result = new ExpandedResult();
         search.getResults().add(result);

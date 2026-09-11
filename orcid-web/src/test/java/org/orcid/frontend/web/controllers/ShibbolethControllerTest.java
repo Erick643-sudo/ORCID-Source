@@ -9,10 +9,10 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -22,12 +22,14 @@ import org.mockito.MockitoAnnotations;
 import org.orcid.core.manager.InstitutionalSignInManager;
 import org.orcid.pojo.OAuthSigninData;
 import org.orcid.test.OrcidJUnit4ClassRunner;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.web.WebAppConfiguration;
 
 @RunWith(OrcidJUnit4ClassRunner.class)
 @WebAppConfiguration
 @ContextConfiguration(locations = { "classpath:test-frontend-web-servlet.xml" })
+@ActiveProfiles("unitTests")
 public class ShibbolethControllerTest {
 
     @Resource(name = "shibbolethController")

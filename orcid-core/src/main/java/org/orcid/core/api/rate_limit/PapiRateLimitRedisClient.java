@@ -4,7 +4,7 @@ import java.time.LocalDate;
 import java.util.Date;
 import java.util.HashMap;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.commons.lang.StringUtils;
 import org.orcid.core.utils.cache.redis.RedisClient;
@@ -29,6 +29,12 @@ public class PapiRateLimitRedisClient {
     private int CASH_EXPIRY_IN_SECONDS; // caching for 2 days to have time to
                                         // synch with DB
 
+    @Value("${org.orcid.papi.rate.limit.anonymous.requests:10000}")
+    private int anonymousRequestLimit;
+
+    @Value("${org.orcid.papi.rate.limit.known.requests:40000}")
+    private int knownRequestLimit;
+
     @Autowired
     private PublicApiDailyRateLimitDao papiRateLimitingDao;
 
@@ -46,7 +52,7 @@ public class PapiRateLimitRedisClient {
     }
 
     public String getRequestDateKeyByClient(String client, LocalDate requestDate) {
-        return client + KEY_DELIMITATOR + requestDate.toString()  ;
+        return client + KEY_DELIMITATOR + requestDate.toString();
     }
 
     public JSONObject getDailyLimitsForClient(String client, LocalDate requestDate) {
@@ -75,17 +81,35 @@ public class PapiRateLimitRedisClient {
             PublicApiDailyRateLimitEntity redisRateLimitEntity = redisObjJsonToEntity(allValuesForKey.get(key));
             PublicApiDailyRateLimitEntity pgRateLimitEntity = null;
             boolean isClient = false;
-            if(StringUtils.isNotEmpty(redisRateLimitEntity.getIpAddress())) {
-                pgRateLimitEntity  = papiRateLimitingDao.findByIpAddressAndRequestDate(redisRateLimitEntity.getIpAddress(), requestDate);
-            }
-            else if(StringUtils.isNotEmpty(redisRateLimitEntity.getClientId())){
-                pgRateLimitEntity  = papiRateLimitingDao.findByClientIdAndRequestDate(redisRateLimitEntity.getClientId(), requestDate);
+            if (StringUtils.isNotEmpty(redisRateLimitEntity.getIpAddress())) {
+                pgRateLimitEntity = papiRateLimitingDao.findByIpAddressAndRequestDate(redisRateLimitEntity.getIpAddress(), requestDate);
+            } else if (StringUtils.isNotEmpty(redisRateLimitEntity.getClientId())) {
+                pgRateLimitEntity = papiRateLimitingDao.findByClientIdAndRequestDate(redisRateLimitEntity.getClientId(), requestDate);
                 isClient = true;
             }
-            if(pgRateLimitEntity != null) {
-                papiRateLimitingDao.updatePublicApiDailyRateLimit(pgRateLimitEntity, isClient);
+            // only save the exceeded limits
+            if (pgRateLimitEntity != null) {
+                if (((pgRateLimitEntity.getRequestCount() > knownRequestLimit) && isClient)
+                        || ((pgRateLimitEntity.getRequestCount() > anonymousRequestLimit) && !isClient)) {
+                    if(isClient) {
+                        LOG.warn("Existent PAPI limit entry: " + pgRateLimitEntity.getRequestCount() + " client ID: " + pgRateLimitEntity.getClientId() + " Request Date " +  pgRateLimitEntity.getRequestDate());
+                    }
+                    else {
+                        LOG.warn("Existent PAPI limit entry: " + pgRateLimitEntity.getRequestCount() + " IP Address: " + pgRateLimitEntity.getIpAddress() + " Request Date " +  pgRateLimitEntity.getRequestDate());   
+                    }
+                    papiRateLimitingDao.updatePublicApiDailyRateLimit(pgRateLimitEntity, isClient);
+                }
             } else {
-                papiRateLimitingDao.persist(redisObjJsonToEntity(allValuesForKey.get(key)));
+                if (((redisRateLimitEntity.getRequestCount() > knownRequestLimit) && isClient)
+                        || ((redisRateLimitEntity.getRequestCount() > anonymousRequestLimit) && !isClient)) {
+                    if(isClient) {
+                        LOG.warn("New PAPI limit entry: " + redisRateLimitEntity.getRequestCount() + " client ID: " + redisRateLimitEntity.getClientId() + " Request Date " +  redisRateLimitEntity.getRequestDate());
+                    }
+                    else {
+                        LOG.warn("New PAPI limit entry: " + redisRateLimitEntity.getRequestCount() + " IP Address: " + redisRateLimitEntity.getIpAddress() + " Request Date " +  redisRateLimitEntity.getRequestDate());   
+                    }
+                    papiRateLimitingDao.persist(redisRateLimitEntity);
+                }
             }
             redisClient.remove(key);
         }
@@ -102,7 +126,6 @@ public class PapiRateLimitRedisClient {
         rateLimitEntity.setRequestDate(LocalDate.parse(redisObj.getString(KEY_REQUEST_DATE)));
         rateLimitEntity.setDateCreated(new Date(redisObj.getInt(KEY_DATE_CREATED)));
         rateLimitEntity.setLastModified(new Date(redisObj.getInt(KEY_LAST_MODIFIED)));
-        papiRateLimitingDao.persist(rateLimitEntity);
         return rateLimitEntity;
     }
 

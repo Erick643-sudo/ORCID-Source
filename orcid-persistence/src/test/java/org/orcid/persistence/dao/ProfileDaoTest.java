@@ -11,10 +11,11 @@ import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.persistence.EntityManager;
-import javax.persistence.Query;
+import jakarta.annotation.Resource;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.lang3.tuple.Pair;
@@ -204,13 +205,13 @@ public class ProfileDaoTest extends DBUnitTest {
         profileDao.updateLastModifiedDateAndIndexingStatusWithoutResult(o2, d2, IndexingStatus.PENDING);
         profileDao.updateLastModifiedDateAndIndexingStatusWithoutResult(o3, d3, IndexingStatus.PENDING);
         
-        List<String> results = profileDao.findOrcidsByIndexingStatus(IndexingStatus.PENDING, 10, 0);
+        Map<String,Date> results = profileDao.findOrcidsByIndexingStatus(IndexingStatus.PENDING, 10, 0);
         assertNotNull(results);
         
         assertEquals(3, results.size());
-        assertTrue(results.contains(o1));
-        assertTrue(results.contains(o2));
-        assertTrue(results.contains(o3));       
+        assertTrue(results.containsKey(o1));
+        assertTrue(results.containsKey(o2));
+        assertTrue(results.containsKey(o3));       
     }
 
     @Test
@@ -389,6 +390,34 @@ public class ProfileDaoTest extends DBUnitTest {
         List<Pair<String, String>> results = profileDao.findEmailsToSendAddWorksEmail(7);
         assertNotNull(results);
         assertEquals(1, results.size());
+    }
+
+    @Test
+    @Rollback(true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void testUpdateDeprecation() {
+        boolean result = profileDao.deprecateProfile("4444-4444-4444-4441", "4444-4444-4444-4442", ProfileEntity.ADMIN_DEPRECATION, "4444-4444-4444-4440");
+        assertTrue(result);
+
+        ProfileEntity profileToUpdateDeprecation = profileDao.find("4444-4444-4444-4441");
+        assertNotNull(profileToUpdateDeprecation.getPrimaryRecord());
+        result = profileDao.updateDeprecation("4444-4444-4444-4441", "2000-0000-0000-0002");
+        assertTrue(result);
+        profileToUpdateDeprecation = profileDao.find("4444-4444-4444-4441");
+        profileDao.refresh(profileToUpdateDeprecation);
+        assertNotNull(profileToUpdateDeprecation.getPrimaryRecord());
+        assertNotNull(profileToUpdateDeprecation.getDeprecatingAdmin());
+        ProfileEntity primaryRecord = profileToUpdateDeprecation.getPrimaryRecord();
+        assertEquals("2000-0000-0000-0002", primaryRecord.getId());
+    }
+
+    @Test
+    public void testIsReviewed() {
+        ProfileEntity profile = profileDao.find("4444-4444-4444-4442");
+        assertTrue(profile.isReviewed());
+
+        profile = profileDao.find("4444-4444-4444-4443");
+        assertFalse(profile.getUsing2FA());
     }
 
     private int updateProfileWithDateCreated(String orcid, Date dateCreated) {

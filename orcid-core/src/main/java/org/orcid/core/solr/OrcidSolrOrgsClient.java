@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrQuery;
@@ -67,6 +67,7 @@ public class OrcidSolrOrgsClient {
         
         // Set the preserveMulti parameter
         query.setParam("preserveMulti", "true");
+        query.setParam("lowercaseOperators", "true");
         
         if(fundersOnly) {
             query.addFilterQuery(String.format("(%s:(%s OR %s))", SolrConstants.ORG_DISAMBIGUATED_ID_SOURCE_TYPE, "ROR", "FUNDREF"));

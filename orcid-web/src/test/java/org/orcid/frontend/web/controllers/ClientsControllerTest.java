@@ -6,6 +6,7 @@ package org.orcid.frontend.web.controllers;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -13,15 +14,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.orcid.core.oauth.OrcidProfileUserDetails;
-import org.orcid.core.security.OrcidWebRole;
+import org.orcid.core.security.OrcidRoles;
 import org.orcid.frontend.web.util.BaseControllerTest;
 import org.orcid.jaxb.model.clientgroup.ClientType;
 import org.orcid.jaxb.model.clientgroup.RedirectUriType;
@@ -33,13 +33,18 @@ import org.orcid.pojo.ajaxForm.Text;
 import org.orcid.test.OrcidJUnit4ClassRunner;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.web.WebAppConfiguration;
-import org.springframework.test.util.ReflectionTestUtils;
 
 @RunWith(OrcidJUnit4ClassRunner.class)
 @WebAppConfiguration
 @ContextConfiguration(locations = { "classpath:test-frontend-web-servlet.xml" })
+@ActiveProfiles("unitTests")
 public class ClientsControllerTest extends BaseControllerTest {
 
     private static final List<String> DATA_FILES = Arrays.asList("/data/SourceClientDetailsEntityData.xml");
@@ -61,11 +66,10 @@ public class ClientsControllerTest extends BaseControllerTest {
 
     @Override
     protected Authentication getAuthentication() {
-        OrcidProfileUserDetails details = new OrcidProfileUserDetails("5555-5555-5555-5558", "5555-5555-5555-5558@user.com",
-                "e9adO9I4UpBwqI5tGR+qDodvAZ7mlcISn+T+kyqXPf2Z6PPevg7JijqYr6KGO8VOskOYqVOEK2FEDwebxWKGDrV/TQ9gRfKWZlzxssxsOnA=");
+        UserDetails details = new User("5555-5555-5555-5558", "e9adO9I4UpBwqI5tGR+qDodvAZ7mlcISn+T+kyqXPf2Z6PPevg7JijqYr6KGO8VOskOYqVOEK2FEDwebxWKGDrV/TQ9gRfKWZlzxssxsOnA=", List.of());
 
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken("5555-5555-5555-5558", null,
-                Arrays.asList(OrcidWebRole.ROLE_PREMIUM_INSTITUTION));
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken("5555-5555-5555-5558", details.getPassword(),
+                Arrays.asList(new SimpleGrantedAuthority(OrcidRoles.ROLE_PREMIUM_INSTITUTION.name())));
         auth.setDetails(details);
         return auth;
     }
@@ -263,9 +267,7 @@ public class ClientsControllerTest extends BaseControllerTest {
         Client client = new Client();
         client.setAllowAutoDeprecate(Checkbox.valueOf(true));
         client.setType(Text.valueOf(ClientType.CREATOR.name()));
-        client.setClientId(Text.valueOf("XXXXXX"));
         client.setDisplayName(Text.valueOf("My client name"));
-        client.setMemberId(Text.valueOf("0000-0000-0000-0000"));
         client.setMemberName(Text.valueOf("My member name"));
         client.setPersistentTokenEnabled(Checkbox.valueOf(true));
         List<RedirectUri> redirectUris = new ArrayList<RedirectUri>();
@@ -293,6 +295,50 @@ public class ClientsControllerTest extends BaseControllerTest {
             }
         }
         assertTrue(found);
+    }
+
+    /**
+     * The group path has the same shape as the individual one: the client id comes from the
+     * request body, so a client belonging to another member must be refused.
+     */
+    @Test
+    public void editClientOfAnotherMemberIsRefusedTest() {
+        // other tests in this class create clients, and getClients() sorts, so pick by id
+        Client client = findClient("APP-5555555555555555");
+        assertNotNull(client);
+        String originalName = client.getDisplayName().getValue();
+
+        Authentication original = SecurityContextHolder.getContext().getAuthentication();
+        try {
+            // sign in as a different member; the client id in the body is left untouched
+            UserDetails other = new User("4444-4444-4444-4446", "password", List.of());
+            UsernamePasswordAuthenticationToken otherAuth = new UsernamePasswordAuthenticationToken("4444-4444-4444-4446", "password",
+                    Arrays.asList(new SimpleGrantedAuthority(OrcidRoles.ROLE_PREMIUM_INSTITUTION.name())));
+            otherAuth.setDetails(other);
+            SecurityContextHolder.getContext().setAuthentication(otherAuth);
+
+            client.getDisplayName().setValue("Taken over");
+            // an attacker constructs the body themselves, so it carries no secret
+            client.setClientSecret(null);
+            Client result = controller.editClient(client);
+
+            assertFalse("the edit should be refused", result.getErrors().isEmpty());
+            assertNull("the refusal must not hand back the client secret", result.getClientSecret());
+        } finally {
+            SecurityContextHolder.getContext().setAuthentication(original);
+        }
+
+        // the owner still sees the original configuration
+        assertEquals(originalName, findClient("APP-5555555555555555").getDisplayName().getValue());
+    }
+
+    private Client findClient(String clientId) {
+        for (Client candidate : controller.getClients()) {
+            if (clientId.equals(candidate.getClientId().getValue())) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     @Test

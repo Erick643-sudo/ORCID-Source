@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -19,8 +20,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Resource;
-import javax.xml.bind.JAXBException;
+import jakarta.annotation.Resource;
+import jakarta.xml.bind.JAXBException;
 import javax.xml.datatype.XMLGregorianCalendar;
 
 import org.apache.commons.lang.RandomStringUtils;
@@ -551,6 +552,137 @@ public class EmailManagerTest extends BaseTest {
         ReflectionTestUtils.setField(emailManager, "profileDao", profileDao);
     }
 
+    @Test
+    public void testRemoveEmails_successful() throws IllegalAccessException {
+        OrcidSecurityManager mockOrcidSecurityManager = Mockito.mock(OrcidSecurityManager.class);
+        ReflectionTestUtils.setField(emailManager, "emailDao", mockEmailDao);
+        ReflectionTestUtils.setField(emailManager, "orcidSecurityManager", mockOrcidSecurityManager);
+
+        EmailEntity email1 = getEmailEntity("remove1@example.com");
+        EmailEntity email2 = getEmailEntity("remove2@example.com");
+        EmailEntity email3 = getEmailEntity("remaining1@example.com");
+        EmailEntity email4 = getEmailEntity("remaining2@example.com");
+        email3.setPrimary(Boolean.TRUE);
+
+        List<String> emailsToRemove = Arrays.asList("remove1@example.com", "remove2@example.com");
+        List<EmailEntity> currentEmailsList = Arrays.asList(email1, email2, email3, email4);
+        List<EmailEntity> remainingEmailsList = Arrays.asList(email3, email4);
+
+        Mockito.when(mockOrcidSecurityManager.isAdmin()).thenReturn(true);
+        Mockito.when(mockEmailDao.findByOrcid(Mockito.eq("orcid"), Mockito.anyLong()))
+                .thenReturn(currentEmailsList)
+                .thenReturn(remainingEmailsList);
+
+        List<Email> result = emailManager.removeEmails("orcid", emailsToRemove);
+
+        assertEquals(2, result.size());
+        assertEquals("remaining1@example.com", result.get(0).getEmail());
+        assertEquals("remaining2@example.com", result.get(1).getEmail());
+
+        Mockito.verify(mockEmailDao, Mockito.times(1)).removeEmail("orcid", "remove1@example.com");
+        Mockito.verify(mockEmailDao, Mockito.times(1)).removeEmail("orcid", "remove2@example.com");
+        Mockito.verify(mockEmailDao, Mockito.times(2)).findByOrcid(Mockito.eq("orcid"), Mockito.anyLong());
+        Mockito.verify(mockEmailDao, Mockito.never()).updatePrimary(Mockito.anyString(), Mockito.anyString());
+
+        ReflectionTestUtils.setField(emailManager, "emailDao", emailDao);
+    }
+
+    @Test
+    public void testRemoveEmails_primaryEmailChange() throws IllegalAccessException {
+        OrcidSecurityManager mockOrcidSecurityManager = Mockito.mock(OrcidSecurityManager.class);
+        ReflectionTestUtils.setField(emailManager, "emailDao", mockEmailDao);
+        ReflectionTestUtils.setField(emailManager, "orcidSecurityManager", mockOrcidSecurityManager);
+
+        EmailEntity oldPrimary = getEmailEntity("oldPrimary@example.com");
+        oldPrimary.setPrimary(Boolean.TRUE);
+        EmailEntity newPrimary = getEmailEntity("newPrimary@example.com");
+
+        List<String> emailsToRemove = List.of("oldPrimary@example.com");
+        List<EmailEntity> currentEmailsList = List.of(oldPrimary, newPrimary);
+        List<EmailEntity> remainingEmailsList = List.of(newPrimary);
+
+        Mockito.when(mockOrcidSecurityManager.isAdmin()).thenReturn(true);
+        Mockito.when(mockEmailDao.findByOrcid(Mockito.eq("orcid"), Mockito.anyLong()))
+                .thenReturn(currentEmailsList)
+                .thenReturn(remainingEmailsList);
+
+        List<Email> result = emailManager.removeEmails("orcid", emailsToRemove);
+
+        assertEquals(1, result.size());
+        assertEquals("newPrimary@example.com", result.get(0).getEmail());
+        assertEquals(Boolean.TRUE, newPrimary.getPrimary());
+
+        Mockito.verify(mockEmailDao, Mockito.times(1)).removeEmail("orcid", "oldPrimary@example.com");
+        Mockito.verify(mockEmailDao, Mockito.times(1)).updatePrimary("orcid", "newPrimary@example.com");
+        Mockito.verify(mockEmailDao, Mockito.times(2)).findByOrcid(Mockito.eq("orcid"), Mockito.anyLong());
+
+        ReflectionTestUtils.setField(emailManager, "emailDao", emailDao);
+    }
+
+    @Test
+    public void testRemoveEmails_throwIfAllEmailsRemoved() {
+        OrcidSecurityManager mockOrcidSecurityManager = Mockito.mock(OrcidSecurityManager.class);
+        ReflectionTestUtils.setField(emailManager, "emailDao", mockEmailDao);
+        ReflectionTestUtils.setField(emailManager, "orcidSecurityManager", mockOrcidSecurityManager);
+
+        List<EmailEntity> currentEmails = Arrays.asList(
+                getEmailEntity("test1@example.com"),
+                getEmailEntity("test2@example.com")
+        );
+
+        List<String> toRemove = Arrays.asList("test1@example.com", "test2@example.com");
+
+        Mockito.when(mockOrcidSecurityManager.isAdmin()).thenReturn(true);
+        Mockito.when(mockEmailDao.findByOrcid(Mockito.anyString(), Mockito.anyLong())).thenReturn(currentEmails);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () ->
+                emailManager.removeEmails("orcid", toRemove)
+        );
+
+        assertEquals("Can't mark all user's as deleted", exception.getMessage());
+
+        ReflectionTestUtils.setField(emailManager, "emailDao", emailDao);
+    }
+
+    @Test
+    public void testRemoveEmails_updatesEmailDomains() throws IllegalAccessException {
+        OrcidSecurityManager mockOrcidSecurityManager = Mockito.mock(OrcidSecurityManager.class);
+        ProfileEmailDomainManager mockProfileEmailDomainManager = Mockito.mock(ProfileEmailDomainManager.class);
+        ProfileEmailDomainManager originalProfileEmailDomainManager = (ProfileEmailDomainManager) ReflectionTestUtils
+                .getField(emailManager, "profileEmailDomainManager");
+        ReflectionTestUtils.setField(emailManager, "emailDao", mockEmailDao);
+        ReflectionTestUtils.setField(emailManager, "orcidSecurityManager", mockOrcidSecurityManager);
+        ReflectionTestUtils.setField(emailManager, "profileEmailDomainManager", mockProfileEmailDomainManager);
+
+        EmailEntity emailToRemove = getEmailEntity("remove@example.com");
+        EmailEntity remainingPrimary = getEmailEntity("remaining@example.com");
+        remainingPrimary.setPrimary(Boolean.TRUE);
+
+        List<String> emailsToRemove = List.of("remove@example.com");
+        List<EmailEntity> currentEmailsList = Arrays.asList(emailToRemove, remainingPrimary);
+        List<EmailEntity> remainingEmailsList = List.of(remainingPrimary);
+
+        Mockito.when(mockOrcidSecurityManager.isAdmin()).thenReturn(true);
+        Mockito.when(mockEmailDao.findByOrcid(Mockito.eq("orcid"), Mockito.anyLong()))
+                .thenReturn(currentEmailsList)
+                .thenReturn(remainingEmailsList);
+
+        emailManager.removeEmails("orcid", emailsToRemove);
+
+        ArgumentCaptor<Emails> captor = ArgumentCaptor.forClass(Emails.class);
+        Mockito.verify(mockProfileEmailDomainManager, Mockito.times(1)).updateEmailDomains(Mockito.eq("orcid"),
+                Mockito.isNull(), captor.capture());
+
+        Emails capturedEmails = captor.getValue();
+        assertNotNull(capturedEmails);
+        assertNotNull(capturedEmails.getEmails());
+        assertEquals(1, capturedEmails.getEmails().size());
+        assertEquals("remaining@example.com", capturedEmails.getEmails().get(0).getEmail());
+
+        ReflectionTestUtils.setField(emailManager, "emailDao", emailDao);
+        ReflectionTestUtils.setField(emailManager, "profileEmailDomainManager", originalProfileEmailDomainManager);
+    }
+
     private ProfileEntity getClaimedProfile(String orcid) {
         ProfileEntity unclaimed = new ProfileEntity();
         unclaimed.setId(orcid);
@@ -564,8 +696,4 @@ public class EmailManagerTest extends BaseTest {
         unclaimed.setClaimed(Boolean.FALSE);
         return unclaimed;
     }
-
-  
-
-    
 }

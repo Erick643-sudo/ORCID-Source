@@ -15,7 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 import org.apache.commons.codec.binary.Base64;
 import org.orcid.core.adapter.JpaJaxbNotificationAdapter;
@@ -30,8 +30,8 @@ import org.orcid.core.manager.ProfileEntityCacheManager;
 import org.orcid.core.manager.SourceManager;
 import org.orcid.core.manager.read_only.EmailManagerReadOnly;
 import org.orcid.core.manager.read_only.impl.ManagerReadOnlyBaseImpl;
+import org.orcid.core.manager.v3.read_only.ClientDetailsManagerReadOnly;
 import org.orcid.core.manager.v3.read_only.GivenPermissionToManagerReadOnly;
-import org.orcid.core.oauth.OrcidOauth2TokenDetailService;
 import org.orcid.core.togglz.Features;
 import org.orcid.core.utils.SourceEntityUtils;
 import org.orcid.jaxb.model.clientgroup.RedirectUriType;
@@ -46,7 +46,6 @@ import org.orcid.jaxb.model.notification.permission_v2.NotificationPermissions;
 import org.orcid.jaxb.model.notification_v2.Notification;
 import org.orcid.jaxb.model.notification_v2.NotificationType;
 import org.orcid.model.notification.institutional_sign_in_v2.NotificationInstitutionalConnection;
-import org.orcid.persistence.dao.GenericDao;
 import org.orcid.persistence.dao.NotificationDao;
 import org.orcid.persistence.dao.ProfileDao;
 import org.orcid.persistence.dao.ProfileEventDao;
@@ -56,11 +55,9 @@ import org.orcid.persistence.jpa.entities.ClientRedirectUriEntity;
 import org.orcid.persistence.jpa.entities.NotificationEntity;
 import org.orcid.persistence.jpa.entities.NotificationInstitutionalConnectionEntity;
 import org.orcid.persistence.jpa.entities.ProfileEntity;
-import org.orcid.persistence.jpa.entities.ProfileEventEntity;
 import org.orcid.persistence.jpa.entities.SourceEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Required;
 import org.springframework.context.MessageSource;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -102,9 +99,6 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
     private SourceManager sourceManager;
 
     @Resource
-    private OrcidOauth2TokenDetailService orcidOauth2TokenDetailService;
-
-    @Resource
     private ClientDetailsEntityCacheManager clientDetailsEntityCacheManager;
 
     @Resource
@@ -121,10 +115,12 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
 
     @Resource
     private SourceEntityUtils sourceEntityUtils;
+
+    @Resource(name = "clientDetailsManagerReadOnlyV3")
+    private ClientDetailsManagerReadOnly clientDetailsManagerReadOnly;
     
     private static final Logger LOGGER = LoggerFactory.getLogger(NotificationManagerImpl.class);
 
-    @Required
     public void setEncryptionManager(EncryptionManager encryptionManager) {
         this.encryptionManager = encryptionManager;
     }
@@ -243,19 +239,13 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
         return notificationAdapter.toNotification(notificationEntity);
     }
 
-    @Override
-    public List<Notification> findUnsentByOrcid(String orcid) {
-        return notificationAdapter.toNotification(notificationDaoReadOnly.findUnsentByOrcid(orcid));
-    }
 
     @Override
-    @Transactional(readOnly = true)
     public List<Notification> findByOrcid(String orcid, boolean includeArchived, int firstResult, int maxResults) {
         return notificationAdapter.toNotification(notificationDao.findByOrcid(orcid, includeArchived, firstResult, maxResults));
     }
 
     @Override
-    @Transactional(readOnly = true)
     public NotificationPermissions findPermissionsByOrcidAndClient(String orcid, String client, int firstResult, int maxResults) {
         NotificationPermissions notifications = new NotificationPermissions();
         List<Notification> notificationsForOrcidAndClient = notificationAdapter
@@ -267,17 +257,15 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
     }
 
     @Override
-    @Transactional(readOnly = true)
     public List<Notification> findNotificationAlertsByOrcid(String orcid) {
         return notificationAdapter.toNotification(notificationDao.findNotificationAlertsByOrcid(orcid));
     }
 
-    @Override
     public List<Notification> filterActionedNotificationAlerts(Collection<Notification> notifications, String userOrcid) {
         return notifications.stream().filter(n -> {
             // Filter only INSTITUTIONAL_CONNECTION notifications
             if (NotificationType.INSTITUTIONAL_CONNECTION.equals(n.getNotificationType())) {
-                boolean alreadyConnected = orcidOauth2TokenDetailService.doesClientKnowUser(n.getSource().retrieveSourcePath(), userOrcid);
+                boolean alreadyConnected = clientDetailsManagerReadOnly.doesClientKnowUser(n.getSource().retrieveSourcePath(), userOrcid);
                 if (alreadyConnected) {
                     flagAsArchived(userOrcid, n.getPutCode(), false);
                 }
@@ -288,25 +276,16 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
     }
 
     @Override
-    @Transactional(readOnly = true)
-    public Notification findById(Long id) {
-        return notificationAdapter.toNotification(notificationDao.find(id));
-    }
-
-    @Override
-    @Transactional(readOnly = true)
     public Notification findByOrcidAndId(String orcid, Long id) {
         return notificationAdapter.toNotification(notificationDao.findByOricdAndId(orcid, id));
     }
 
     @Override
-    @Transactional
     public Notification flagAsArchived(String orcid, Long id) throws OrcidNotificationAlreadyReadException {
         return flagAsArchived(orcid, id, true);
     }
 
     @Override
-    @Transactional
     public Notification flagAsArchived(String orcid, Long id, boolean validateForApi) throws OrcidNotificationAlreadyReadException {
         NotificationEntity notificationEntity = notificationDao.findByOricdAndId(orcid, id);
         if (notificationEntity == null) {
@@ -327,29 +306,6 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
             notificationEntity.setArchivedDate(new Date());
             notificationDao.merge(notificationEntity);
         }
-        return notificationAdapter.toNotification(notificationEntity);
-    }
-
-    @Override
-    @Transactional
-    public Notification setActionedAndReadDate(String orcid, Long id) {
-        NotificationEntity notificationEntity = notificationDao.findByOricdAndId(orcid, id);
-        if (notificationEntity == null) {
-            return null;
-        }
-
-        Date now = new Date();
-
-        if (notificationEntity.getActionedDate() == null) {
-            notificationEntity.setActionedDate(now);
-            notificationDao.merge(notificationEntity);
-        }
-
-        if (notificationEntity.getReadDate() == null) {
-            notificationEntity.setReadDate(now);
-            notificationDao.merge(notificationEntity);
-        }
-
         return notificationAdapter.toNotification(notificationEntity);
     }
 
@@ -407,56 +363,8 @@ public class NotificationManagerImpl extends ManagerReadOnlyBaseImpl implements 
     }
 
     @Override
-    public void flagAsRead(String orcid, Long id) {
-        notificationDao.flagAsRead(orcid, id);
-    }
-
-    @Override
     public ActionableNotificationEntity findActionableNotificationEntity(Long id) {
         return (ActionableNotificationEntity) notificationDao.find(id);
     }
-
-    @Override
-    public List<Notification> findNotificationsToSend(String orcid, Float emailFrequencyDays, Date recordActiveDate) {
-        List<NotificationEntity> notifications = new ArrayList<NotificationEntity>();
-        notifications = notificationDao.findNotificationsToSend(new Date(), orcid, recordActiveDate);          
-        return notificationAdapter.toNotification(notifications);
-    }
-
-    @Override
-    public void processOldNotificationsToAutoArchive() {
-        Calendar calendar = new GregorianCalendar();
-        calendar.add(Calendar.MONTH, -6);
-        Date createdBefore = calendar.getTime();
-        LOGGER.info("About to auto archive notifications created before {}", createdBefore);
-        int numArchived = 0;
-        do {
-            numArchived = notificationDao.archiveNotificationsCreatedBefore(createdBefore, 100);
-            LOGGER.info("Archived {} old notifications", numArchived);
-        } while (numArchived != 0);
-    }
-
-    @Override
-    public void processOldNotificationsToAutoDelete() {
-        Calendar calendar = new GregorianCalendar();
-        calendar.add(Calendar.YEAR, -1);
-        Date createdBefore = calendar.getTime();
-        LOGGER.info("About to auto delete notifications created before {}", createdBefore);
-        List<NotificationEntity> notificationsToDelete = Collections.<NotificationEntity> emptyList();
-        do {
-            notificationsToDelete = notificationDao.findNotificationsCreatedBefore(createdBefore, 100);
-            LOGGER.info("Got batch of {} old notifications to delete", notificationsToDelete.size());
-            for (NotificationEntity notification : notificationsToDelete) {
-                LOGGER.info("About to delete old notification: id={}, orcid={}, dateCreated={}",
-                        new Object[] { notification.getId(), notification.getOrcid(), notification.getDateCreated() });
-                removeNotification(notification.getId());
-            }
-        } while (!notificationsToDelete.isEmpty());
-    }
-    
-    @Override
-    public void removeNotification(Long notificationId) {
-        notificationDao.remove(notificationId);
-    }    
 
 }

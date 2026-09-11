@@ -2,8 +2,7 @@ package org.orcid.core.manager.v3.impl;
 
 import java.util.*;
 
-import javax.annotation.Resource;
-import javax.transaction.Transactional;
+import jakarta.annotation.Resource;
 
 import org.orcid.core.adapter.v3.JpaJaxbResearchResourceAdapter;
 import org.orcid.core.manager.ClientDetailsEntityCacheManager;
@@ -59,8 +58,10 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
     @Resource(name = "notificationManagerV3")
     private NotificationManager notificationManager;
 
+    @Resource
+    private SourceEntityUtils sourceEntityUtils;
+
     @Override
-    @Transactional
     public ResearchResource createResearchResource(String orcid, ResearchResource rr, boolean isApiRequest) {
         Source activeSource = sourceManager.retrieveActiveSource();
         activityValidator.validateResearchResource(rr, activeSource, true, isApiRequest, null);
@@ -88,13 +89,12 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
         }
 
         // Set the source
-        SourceEntityUtils.populateSourceAwareEntityFromSource(activeSource, researchResourceEntity);
+        sourceEntityUtils.populateSourceAwareEntityFromSource(activeSource, researchResourceEntity);
 
         ProfileEntity profile = profileEntityCacheManager.retrieve(orcid);        
         setIncomingPrivacy(researchResourceEntity, profile);
         DisplayIndexCalculatorHelper.setDisplayIndexOnNewEntity(researchResourceEntity, isApiRequest);
         rrDao.persist(researchResourceEntity);
-        rrDao.flush();
         if (isApiRequest) {
             notificationManager.sendAmendEmail(orcid, AmendedSection.RESEARCH_RESOURCE, createItemList(researchResourceEntity, rr.getExternalIdentifiers(), ActionType.CREATE));
         }
@@ -108,7 +108,7 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
         Visibility originalVisibility = Visibility.valueOf(rre.getVisibility());
 
         // Save the original source
-        Source originalSource = SourceEntityUtils.extractSourceFromEntity(rre, clientDetailsEntityCacheManager);
+        Source originalSource = sourceEntityUtils.extractSourceFromEntity(rre);
 
         activityValidator.validateResearchResource(rr, activeSource, false, isApiRequest, originalVisibility);
         if (!isApiRequest) {
@@ -127,7 +127,7 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
         rre.setVisibility(originalVisibility.name());
 
         // Be sure it doesn't overwrite the source
-        SourceEntityUtils.populateSourceAwareEntityFromSource(originalSource, rre);
+        sourceEntityUtils.populateSourceAwareEntityFromSource(originalSource, rre);
 
         // update orgs (ordering managed by @OrderColumn on lists)
         List<OrgEntity> updatedOrganizations = orgManager.getOrgEntities(rr.getProposal().getHosts());
@@ -138,7 +138,6 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
         }
 
         rre = rrDao.merge(rre);
-        rrDao.flush();
         if (isApiRequest) {
             notificationManager.sendAmendEmail(orcid, AmendedSection.RESEARCH_RESOURCE, createItemList(rre, rr.getExternalIdentifiers(), ActionType.UPDATE));
         }
@@ -146,7 +145,6 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
     }
 
     @Override
-    @Transactional
     public boolean checkSourceAndRemoveResearchResource(String orcid, Long researchResourceId) {
         ResearchResourceEntity rr = rrDao.getResearchResource(orcid, researchResourceId);
         orcidSecurityManager.checkSourceAndThrow(rr);
@@ -157,7 +155,6 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
     }
 
     @Override
-    @Transactional
     public boolean updateToMaxDisplay(String orcid, Long researchResourceId) {
         return rrDao.updateToMaxDisplay(orcid, researchResourceId);
     }
@@ -194,13 +191,11 @@ public class ResearchResourceManagerImpl extends ResearchResourceManagerReadOnly
     }
 
     @Override
-    @Transactional
     public boolean updateVisibilities(String orcid, ArrayList<Long> researchResourceIds, Visibility visibility) {
         return rrDao.updateVisibilities(orcid, researchResourceIds, visibility.name());
     }
 
     @Override
-    @Transactional
     public void removeResearchResources(String effectiveUserOrcid, ArrayList<Long> rrIds) {
         for (long id : rrIds)
             rrDao.removeResearchResource(effectiveUserOrcid, id);

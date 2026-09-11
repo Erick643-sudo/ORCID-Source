@@ -5,7 +5,7 @@
 	xmlns:context="http://www.springframework.org/schema/context"
 	xsi:schemaLocation="
        http://activemq.apache.org/schema/core http://activemq.apache.org/schema/core/activemq-core.xsd
-       http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-4.3.xsd
+       http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd
        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
 
 	<context:property-placeholder
@@ -27,6 +27,19 @@
 			<!-- tcp for external communication -->
 			<transportConnector name="tcp" uri="tcp://0.0.0.0:61616" />
 		</transportConnectors>
+
+		<!-- ensure dead letter messages retain the source queue name (DLQ.<queue>) -->
+		<destinationPolicy>
+			<policyMap>
+				<policyEntries>
+					<policyEntry queue=">">
+						<deadLetterStrategy>
+							<individualDeadLetterStrategy useQueueForQueueMessages="true" queuePrefix="DLQ." />
+						</deadLetterStrategy>
+					</policyEntry>
+				</policyEntries>
+			</policyMap>
+		</destinationPolicy>
 
 		<destinations>
 			<queue physicalName="${org.orcid.messaging.reindex.solr}"
